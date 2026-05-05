@@ -23,6 +23,7 @@ function sanitizeProgramPayload(data, style = 'snake', includeDates = true) {
         title: String(data.title || '').trim(),
         training_partner: String(data.training_partner || '').trim(),
         description: rawDescription,
+        training_location: String(data.training_location || '').trim(),
         status: String(data.status || ProgramStatus.UPCOMING).toLowerCase(),
     };
     const trainerId = String(data.trainer_id || '').trim();
@@ -81,6 +82,7 @@ function buildProgramPayloadCandidates(data) {
         ...strictRequiredPayload,
         training_partner: snake.training_partner,
         training_partners: trainingPartnersValue,
+        ...(snake.training_location ? { training_location: snake.training_location, trainingLocation: snake.training_location, location: snake.training_location } : {}),
         ...(snake.trainer_id ? { trainer_id: snake.trainer_id } : {}),
     };
     const hyphenDates = {
@@ -174,6 +176,11 @@ function normalizeProgramDoc(program) {
             || program.trainingPartner
             || program['training-partners']
             || program.training_partners
+            || '',
+        training_location: program.training_location
+            || program.trainingLocation
+            || program.location
+            || program.venue
             || '',
         training_partner_id: program.training_partner_id
             || program.trainingPartnerId
@@ -288,6 +295,7 @@ function buildBackfillProgramData(program) {
         title: normalized.title || 'Untitled Program',
         training_partner: normalized.training_partner || '',
         description: normalized.description || '',
+        training_location: normalized.training_location || '',
         max_capacity: Number(normalized.max_capacity) || 1,
         status: normalized.status || ProgramStatus.UPCOMING,
         start_date: startBase.toISOString(),
@@ -624,6 +632,7 @@ export default function ProgramsPage() {
             const matchesQuery = !q
                 || String(p.title || '').toLowerCase().includes(q)
                 || String(p.training_partner || '').toLowerCase().includes(q)
+                || String(p.training_location || '').toLowerCase().includes(q)
                 || String(p.description || '').toLowerCase().includes(q);
             const matchesStatus = filters.status === 'all' || String(p.status || '').toLowerCase() === filters.status;
             const matchesTrainer = filters.trainerId === 'all' || String(p.trainer_id || '') === filters.trainerId;

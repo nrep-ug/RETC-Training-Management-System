@@ -26,6 +26,14 @@ function formatStatusLabelForPdf(status) {
         return '—';
     return raw.replace(/\b\w/g, (c) => c.toUpperCase());
 }
+function formatCertificationLabel(value) {
+    const raw = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (raw === 'certified')
+        return 'Certified';
+    if (raw === 'not_certified' || raw === 'not-certified')
+        return 'Not Certified';
+    return 'Pending';
+}
 function normalizeGender(value) {
     const v = String(value || '').trim().toLowerCase();
     if (v === 'male' || v === 'm')
@@ -725,6 +733,7 @@ export default function ReportsPage() {
                 normalizeGender(t.gender),
                 t.district || '',
                 programTitleById[getProgramIdFromTrainee(t)] || 'Unassigned',
+                formatCertificationLabel(t.certification_status || t.certificationStatus),
                 t.qualification || '',
                 t.next_of_kin_name || '',
                 t.next_of_kin_phone || '',
@@ -759,10 +768,10 @@ export default function ReportsPage() {
                     ? 'No trainee records were returned from the database.'
                     : 'No trainees could be included after widening filters. Check enrollments and program links in Appwrite.';
             const body = trainees.length > 0
-                ? rows.map((r) => [r[1], r[2], r[3], r[4], r[5], r[6], r[12]])
+                ? rows.map((r) => [r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[13]])
                 : [[{
                         content: emptyTableMsg,
-                        colSpan: 7,
+                        colSpan: 8,
                         styles: { halign: 'center', fontStyle: 'italic', textColor: [100, 116, 139] },
                     }]];
             /** Explicit mm widths (total = content width) so narrow % columns do not stack letters vertically. */
@@ -772,15 +781,16 @@ export default function ReportsPage() {
                 phone: 19,
                 gender: 16,
                 district: 17,
-                program: 23,
-                status: 21,
+                program: 30,
+                cert: 16,
+                status: 13,
             };
             autoTable(doc, {
                 ...base,
                 startY: yNext,
                 tableWidth: cw,
                 styles: { ...base.styles, fontSize: 8.5, cellPadding: { top: 3, right: 3, bottom: 3, left: 3 } },
-                head: [['Name', 'Email', 'Phone', 'Gender', 'District', 'Program', 'Status']],
+                head: [['Name', 'Email', 'Phone', 'Gender', 'District', 'Program', 'Certification', 'Status']],
                 body,
                 headStyles: headStylesData,
                 columnStyles: {
@@ -790,7 +800,8 @@ export default function ReportsPage() {
                     3: { cellWidth: tw.gender, halign: 'left' },
                     4: { cellWidth: tw.district, halign: 'left' },
                     5: { cellWidth: tw.program, halign: 'left' },
-                    6: { cellWidth: tw.status, halign: 'left' },
+                    6: { cellWidth: tw.cert, halign: 'left' },
+                    7: { cellWidth: tw.status, halign: 'left' },
                 },
             });
             addPdfPageFooters(doc);
@@ -838,6 +849,7 @@ export default function ReportsPage() {
                 p.title,
                 p.training_partner || p.trainingPartner || partnerById[getRelationshipId(p.training_partner_id || p.trainingPartnerId)] || '',
                 (programPartnerMap[p.$id] || []).map((id) => partnerById[id]).filter(Boolean).join(', '),
+                p.training_location || p.trainingLocation || p.location || p.venue || '',
                 p.description || '',
                 new Date(p.start_date || p.startDate || p['start-date']).toLocaleDateString(),
                 getTrainingPeriodWeeks(p),
@@ -860,37 +872,39 @@ export default function ReportsPage() {
             const base = getPdfTableBase(doc);
             const headStylesData = { ...base.headStyles, fillColor: [255, 136, 41], fontSize: 8, halign: 'left' };
             const progBody = programList.length > 0
-                ? rows.map((r) => [r[1], r[2], r[3], r[5], r[6], r[7], formatStatusLabelForPdf(r[8])])
+                ? rows.map((r) => [r[1], r[2], r[3], r[4], r[6], r[7], r[8], formatStatusLabelForPdf(r[9])])
                 : [[{
                         content: 'No programs match the selected filters.',
-                        colSpan: 7,
+                        colSpan: 8,
                         styles: { halign: 'center', fontStyle: 'italic', textColor: [100, 116, 139] },
                     }]];
             const pw = {
-                title: 28,
-                partner: 24,
-                other: 46,
-                start: 20,
-                weeks: 16,
-                cap: 14,
-                status: 18,
+                title: 24,
+                partner: 18,
+                other: 30,
+                location: 20,
+                start: 16,
+                weeks: 12,
+                cap: 11,
+                status: 13,
             };
             autoTable(doc, {
                 ...base,
                 startY: yNext,
                 tableWidth: cw,
                 styles: { ...base.styles, fontSize: 8.5, cellPadding: { top: 3, right: 3, bottom: 3, left: 3 } },
-                head: [['Program', 'Training partner', 'Other partners', 'Start date', 'Weeks', 'Capacity', 'Status']],
+                head: [['Program', 'Training partner', 'Other partners', 'Location', 'Start date', 'Weeks', 'Capacity', 'Status']],
                 body: progBody,
                 headStyles: headStylesData,
                 columnStyles: {
                     0: { cellWidth: pw.title, halign: 'left' },
                     1: { cellWidth: pw.partner, halign: 'left' },
                     2: { cellWidth: pw.other, halign: 'left' },
-                    3: { cellWidth: pw.start, halign: 'left' },
-                    4: { cellWidth: pw.weeks, halign: 'left' },
-                    5: { cellWidth: pw.cap, halign: 'left' },
-                    6: { cellWidth: pw.status, halign: 'left' },
+                    3: { cellWidth: pw.location, halign: 'left' },
+                    4: { cellWidth: pw.start, halign: 'left' },
+                    5: { cellWidth: pw.weeks, halign: 'left' },
+                    6: { cellWidth: pw.cap, halign: 'left' },
+                    7: { cellWidth: pw.status, halign: 'left' },
                 },
             });
             addPdfPageFooters(doc);

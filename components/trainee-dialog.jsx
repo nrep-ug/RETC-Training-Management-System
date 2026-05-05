@@ -18,6 +18,7 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
         gender: 'Male',
         program_id: '',
         status: TraineeStatus.ENROLLED,
+        certification_status: 'pending',
         district: '',
         qualification: '',
         next_of_kin_name: '',
@@ -55,6 +56,10 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
                 gender: normalizedGender,
                 program_id: trainee.program_id || '',
                 status: trainee.status || TraineeStatus.ENROLLED,
+                certification_status: String(trainee.certification_status || trainee.certificationStatus || 'pending')
+                    .trim()
+                    .toLowerCase()
+                    .replace(/[\s_]+/g, '-'),
                 district: trainee.district || '',
                 qualification: trainee.qualification || '',
                 next_of_kin_name: trainee.next_of_kin_name || '',
@@ -71,6 +76,7 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
                 gender: 'Male',
                 program_id: '',
                 status: TraineeStatus.ENROLLED,
+                certification_status: 'pending',
                 district: '',
                 qualification: '',
                 next_of_kin_name: '',
@@ -274,10 +280,22 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
             <Label htmlFor="district">District</Label>
             <Input id="district" value={formData.district} onChange={(e) => handleChange('district', e.target.value)} placeholder="District name" disabled={isLoading}/>
           </div>
-
           <div className="space-y-2">
             <Label htmlFor="qualification">Qualification *</Label>
             <Input id="qualification" value={formData.qualification} onChange={(e) => handleChange('qualification', e.target.value)} placeholder="e.g., Bachelor&apos;s Degree" disabled={isLoading}/>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="certification_status">Certification Status</Label>
+            <Select value={formData.certification_status} onValueChange={(value) => handleChange('certification_status', value)}>
+              <SelectTrigger disabled={isLoading}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="certified">Certified</SelectItem>
+                <SelectItem value="not-certified">Not Certified</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-2">
             <Label htmlFor="next_of_kin_name">Next of Kin Name</Label>

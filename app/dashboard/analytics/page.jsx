@@ -22,6 +22,14 @@ function normalizeGender(value) {
         return 'Female';
     return 'Other';
 }
+function normalizeCertificationStatus(value) {
+    const v = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (v === 'certified')
+        return 'Certified';
+    if (v === 'not_certified' || v === 'not-certified')
+        return 'Not Certified';
+    return 'Pending';
+}
 function getProgramIdFromTrainee(trainee) {
     const value = trainee.program_id || trainee.programId || trainee.program || '';
     if (typeof value === 'string')
@@ -98,6 +106,11 @@ function getPartnerIdsForProgram(program, programPartnerMap, partnersRaw) {
     const ids = new Set([...(programPartnerMap[program.$id] || [])]);
     getTrainingPartnerIdsForProgram(program, partnersRaw).forEach((id) => ids.add(id));
     return [...ids];
+}
+function isPartnerActive(partner) {
+    const status = String(partner?.status || '').trim().toLowerCase();
+    // Treat missing/legacy status as active; only explicit "inactive" is excluded.
+    return status !== 'inactive';
 }
 async function fetchAllDocuments(databases, databaseId, collectionId, { maxDocs = 100000, pageSize = 250 } = {}) {
     if (!databases || !databaseId || !collectionId)
@@ -267,10 +280,14 @@ export default function AnalyticsPage() {
     }), [traineesRaw, filters, allowedProgramIds, programById]);
     const stats = useMemo(() => {
         const completedCount = filteredTrainees.filter((t) => String(t.status || '').toLowerCase() === 'completed').length;
-        const distinctPartnerIds = new Set();
-        filteredPrograms.forEach((p) => {
-            getPartnerIdsForProgram(p, programPartnerMap, partnersRaw).forEach((id) => distinctPartnerIds.add(id));
-        });
+        const certifiedCount = filteredTrainees.filter((t) => normalizeCertificationStatus(t.certification_status || t.certificationStatus) === 'Certified').length;
+        const activePartnersCount = partnersRaw.filter((p) => {
+            if (!isPartnerActive(p))
+                return false;
+            if (filters.trainingPartnerId === 'all')
+                return true;
+            return String(p.$id || '').trim() === String(filters.trainingPartnerId || '').trim();
+        }).length;
         const avgTrainingWeeks = filteredPrograms.length > 0
             ? Math.round((filteredPrograms.reduce((sum, p) => sum + getTrainingPeriodWeeks(p), 0) / filteredPrograms.length) * 10) / 10
             : 0;
@@ -278,11 +295,12 @@ export default function AnalyticsPage() {
             trainingsConducted: filteredPrograms.length,
             enrolledCount: filteredTrainees.length - completedCount,
             completedCount,
+            certifiedCount,
             totalTrainees: filteredTrainees.length,
-            activePartners: distinctPartnerIds.size,
+            activePartners: activePartnersCount,
             avgTrainingWeeks,
         };
-    }, [filteredTrainees, filteredPrograms, programPartnerMap, partnersRaw]);
+    }, [filteredTrainees, filteredPrograms, partnersRaw, filters.trainingPartnerId]);
     const data = useMemo(() => {
         const statusMap = { upcoming: 0, ongoing: 0, completed: 0 };
         filteredPrograms.forEach((p) => {
@@ -307,6 +325,12 @@ export default function AnalyticsPage() {
             attendanceMap[label] = (attendanceMap[label] || 0) + 1;
         });
         const courseAttendance = Object.entries(attendanceMap).map(([course, trainees]) => ({ course, trainees })).sort((a, b) => b.trainees - a.trainees).slice(0, 8);
+        const certificationMap = { Certified: 0, Pending: 0, 'Not Certified': 0 };
+        filteredTrainees.forEach((t) => {
+            const label = normalizeCertificationStatus(t.certification_status || t.certificationStatus);
+            certificationMap[label] = (certificationMap[label] || 0) + 1;
+        });
+        const certificationDistribution = Object.entries(certificationMap).map(([name, value]) => ({ name, value })).filter((item) => item.value > 0);
         const trainerRoleMap = { trainer: 0, senior_trainer: 0 };
         trainersRaw.forEach((trainer) => {
             const role = String(trainer.role || '').toLowerCase();
@@ -337,7 +361,7 @@ export default function AnalyticsPage() {
             .map(([partner, programs]) => ({ partner, programs }))
             .sort((a, b) => b.programs - a.programs)
             .slice(0, 8);
-        return { programStatus, genderDistribution, districtDistribution, courseAttendance, trainerRoleDistribution, yearlyParticipation, partnerContribution };
+        return { programStatus, genderDistribution, districtDistribution, courseAttendance, certificationDistribution, trainerRoleDistribution, yearlyParticipation, partnerContribution };
     }, [filteredTrainees, filteredPrograms, trainersRaw, partnersRaw, programPartnerMap, programById]);
     const years = useMemo(() => {
         const set = new Set();
@@ -424,6 +448,21 @@ export default function AnalyticsPage() {
                     <YAxis />
                     <Tooltip />
                     <Bar dataKey="trainees" fill="#047857"/>
+                  </BarChart>
+                </ResponsiveContainer>),
+            });
+        }
+        if (data.certificationDistribution.length > 0) {
+            cards.push({
+                id: 'certificationDistribution',
+                title: 'Certification Status',
+                element: (<ResponsiveContainer width="100%" height={230}>
+                  <BarChart data={data.certificationDistribution}>
+                    <CartesianGrid strokeDasharray="3 3"/>
+                    <XAxis dataKey="name"/>
+                    <YAxis />
+                    <Tooltip />
+                    <Bar dataKey="value" fill="#10b981"/>
                   </BarChart>
                 </ResponsiveContainer>),
             });
@@ -573,6 +612,7 @@ export default function AnalyticsPage() {
                     ['Trainings conducted', String(filteredPrograms.length)],
                     ['Trainees enrolled (active)', String(stats.enrolledCount)],
                     ['Trainees completed', String(stats.completedCount)],
+                    ['Trainees certified', String(stats.certifiedCount)],
                     ['Total trainees (in scope)', String(stats.totalTrainees)],
                     ['Active partners (distinct)', String(stats.activePartners)],
                     ['Avg training period (weeks)', String(stats.avgTrainingWeeks)],
@@ -597,6 +637,25 @@ export default function AnalyticsPage() {
                 startY: y,
                 head: [['Course / program', 'Trainees']],
                 body: courseRows,
+                columnStyles: {
+                    0: { cellWidth: contentW * 0.62, halign: 'left', textColor: [15, 23, 42] },
+                    1: { halign: 'right', fontStyle: 'bold', textColor: [15, 23, 42] },
+                },
+            });
+            y = doc.lastAutoTable.finalY + 12;
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(11);
+            doc.setTextColor(51, 65, 85);
+            doc.text('CERTIFICATION STATUS', marginX, y);
+            y += 7;
+            const certRows = data.certificationDistribution.length > 0
+                ? data.certificationDistribution.map((item) => [item.name, String(item.value)])
+                : [['No certification data in scope', '—']];
+            autoTable(doc, {
+                ...tableBase,
+                startY: y,
+                head: [['Certification status', 'Trainees']],
+                body: certRows,
                 columnStyles: {
                     0: { cellWidth: contentW * 0.62, halign: 'left', textColor: [15, 23, 42] },
                     1: { halign: 'right', fontStyle: 'bold', textColor: [15, 23, 42] },
@@ -661,7 +720,7 @@ export default function AnalyticsPage() {
           <h2 className="text-lg font-semibold text-slate-900">Analytics Filters</h2>
           <span className="text-xs text-slate-500 sm:text-right">Refine by period, demographics, and training partner</span>
         </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <div className="space-y-2">
             <Label>Year</Label>
             <p className="text-xs text-slate-500">Registration or program start year</p>

@@ -88,6 +88,14 @@ function sanitizeTraineePayload(data) {
                 }
                 throw new Error('Gender must be Male or Female.');
             }
+            if (key === 'certification_status') {
+                const normalized = trimmed.toLowerCase().replace(/[\s-]+/g, '_');
+                if (normalized === 'certified' || normalized === 'pending' || normalized === 'not_certified') {
+                    cleaned[key] = normalized === 'not_certified' ? 'not-certified' : normalized;
+                    return;
+                }
+                throw new Error('Certification status must be certified, pending, or not-certified.');
+            }
             cleaned[key] = trimmed;
             return;
         }
@@ -103,6 +111,9 @@ function sanitizeTraineePayload(data) {
     if (!cleaned.consent_given) {
         cleaned.consent_given = 'no';
     }
+    if (!cleaned.certification_status) {
+        cleaned.certification_status = 'pending';
+    }
     return cleaned;
 }
 function buildTraineePayloadCandidates(payload, programId) {
@@ -114,18 +125,13 @@ function buildTraineePayloadCandidates(payload, programId) {
         ...base,
         consent_given: String(base.consent_given || 'no'),
     };
-    const withCamelConsent = { ...strictStringConsent };
-    if (withCamelConsent.consent_date) {
-        withCamelConsent.consentDate = withCamelConsent.consent_date;
-    }
     const withoutConsentDate = { ...strictStringConsent };
     delete withoutConsentDate.consent_date;
-    delete withoutConsentDate.consentDate;
     const consentTrueFalse = {
         ...withoutConsentDate,
         consent_given: withoutConsentDate.consent_given === 'yes' ? 'true' : 'false',
     };
-    return [strictStringConsent, withCamelConsent, withoutConsentDate, consentTrueFalse];
+    return [strictStringConsent, withoutConsentDate, consentTrueFalse];
 }
 async function createTraineeWithFallback(payload, programId) {
     const candidates = buildTraineePayloadCandidates(payload, programId);
@@ -404,7 +410,7 @@ export default function TraineesPage() {
         </div>
       </div>
       <Card className="mb-6 p-4">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-6">
           <div className="space-y-2 md:col-span-2">
             <Label>Search</Label>
             <Input placeholder="Search by name, email or phone" value={filters.query} onChange={(e) => setFilters((prev) => ({ ...prev, query: e.target.value }))}/>

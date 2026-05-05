@@ -104,6 +104,7 @@ export function ProgramTable({ programs, isLoading, onEdit, onDelete, isAdmin, p
           <tr>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Title</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Training Partner</th>
+            <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Location</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Start Date</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Training Period (Weeks)</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Status</th>
@@ -116,6 +117,7 @@ export function ProgramTable({ programs, isLoading, onEdit, onDelete, isAdmin, p
               <td className="max-w-[200px] truncate px-3 py-3 text-sm text-gray-600 sm:px-6 sm:py-4" title={getTrainingPartnerDisplay(program)}>
                 {getTrainingPartnerDisplay(program)}
               </td>
+              <td className="px-3 py-3 text-sm text-gray-600 sm:px-6 sm:py-4">{program.training_location || program.trainingLocation || program.location || program.venue || '-'}</td>
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-6 sm:py-4">
                 {program.start_date ? format(new Date(program.start_date), 'MMM dd, yyyy') : '-'}
               </td>
@@ -176,6 +178,10 @@ export function ProgramTable({ programs, isLoading, onEdit, onDelete, isAdmin, p
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Capacity</p>
                     <p className="mt-1 font-semibold text-slate-800">{viewProgram.max_capacity ?? '-'}</p>
                   </div>
+                </div>
+                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Training Location</p>
+                  <p className="mt-1 font-semibold text-slate-800">{viewProgram.training_location || viewProgram.trainingLocation || viewProgram.location || viewProgram.venue || '-'}</p>
                 </div>
               </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

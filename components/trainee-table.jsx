@@ -62,6 +62,16 @@ export function TraineeTable({ trainees, isLoading, onEdit, onDelete, isAdmin, p
             return 'On Hold';
         return status || '-';
     };
+    const getCertificationLabel = (status) => {
+        const normalized = String(status || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+        if (normalized === 'certified')
+            return 'Certified';
+        if (normalized === 'not_certified' || normalized === 'not-certified')
+            return 'Not Certified';
+        if (normalized === 'pending')
+            return 'Pending';
+        return '-';
+    };
     if (isLoading) {
         return (<div className="p-8 text-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
@@ -76,7 +86,7 @@ export function TraineeTable({ trainees, isLoading, onEdit, onDelete, isAdmin, p
     const { pagedItems, page, setPage, pageSize, setPageSize, total, totalPages, rangeFrom, rangeTo, } = pagination;
     return (<div className="overflow-hidden rounded-2xl border border-[#047857]/15 bg-gradient-to-br from-white via-white to-[#047857]/[0.03] shadow-sm">
       <div className="overflow-x-auto">
-      <table className="w-full min-w-[800px]">
+      <table className="w-full min-w-[940px]">
         <thead className="border-b border-[#047857]/15 bg-gradient-to-r from-[#047857]/10 via-[#047857]/5 to-[#ff8829]/10">
           <tr>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Name</th>
@@ -85,6 +95,7 @@ export function TraineeTable({ trainees, isLoading, onEdit, onDelete, isAdmin, p
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Gender</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">District</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Program</th>
+            <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Certification</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Status</th>
             {isAdmin && <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Actions</th>}
           </tr>
@@ -97,6 +108,7 @@ export function TraineeTable({ trainees, isLoading, onEdit, onDelete, isAdmin, p
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-6 sm:py-4">{trainee.gender || '-'}</td>
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-6 sm:py-4">{trainee.district || '-'}</td>
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-6 sm:py-4">{trainee.program_name || programMap[trainee.program_id] || '-'}</td>
+              <td className="px-3 py-3 text-sm text-gray-600 sm:px-6 sm:py-4">{getCertificationLabel(trainee.certification_status || trainee.certificationStatus)}</td>
               <td className="px-3 py-3 text-sm sm:px-6 sm:py-4">
                 <span role="status" className={cn('inline-flex max-w-full items-center rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize', getStatusBadgeStyles(trainee.status))}>
                   {getStatusLabel(trainee.status)}
