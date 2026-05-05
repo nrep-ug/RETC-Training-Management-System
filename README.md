@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # RETC Training Management System
 
 ## What is this system?
@@ -169,3 +170,7 @@ Expected columns include at least **`email`** and **`name`**; optional columns s
 ## License
 
 Built for the RETC organization.
+=======
+# RETC-Training-Management-System
+The RETC Training Management System is RETC’s internal web platform for operating training programmes end-to-end: maintaining participant, programme, trainer, and partner records; supporting operational analytics and document exports; and enforcing role-based administration for authorised staff. Implemented with Next.js and Appwrite.
+>>>>>>> 0ddd92bc84295eacca942a22e4baf271d16ecd41
