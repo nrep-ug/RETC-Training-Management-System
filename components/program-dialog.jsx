@@ -8,6 +8,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
+const PROGRAM_TITLE_MAX = 100;
+const PROGRAM_DESCRIPTION_MAX = 400;
 export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = [], partners = [], isTrainersLoading = false, isPartnersLoading = false, }) {
     const [isLoading, setIsLoading] = useState(false);
     const [submitError, setSubmitError] = useState('');
@@ -19,6 +21,7 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
         training_partner_id: '',
         partner_ids: [],
         description: '',
+        training_location: '',
         start_date: '',
         training_period_weeks: '',
         trainer_id: '',
@@ -77,6 +80,7 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
                     return raw.filter((id) => id && id !== mainId);
                 })(),
                 description: program.description || '',
+                training_location: program.training_location || program.trainingLocation || program.location || program.venue || '',
                 start_date: startDate ? String(startDate).split('T')[0] : '',
                 training_period_weeks: durationWeeks,
                 trainer_id: trainerValue,
@@ -91,6 +95,7 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
                 training_partner_id: '',
                 partner_ids: [],
                 description: '',
+                training_location: '',
                 start_date: '',
                 training_period_weeks: '',
                 trainer_id: '',
@@ -232,7 +237,8 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
           {currentStep === 1 && (<>
           <div className="space-y-2">
             <Label htmlFor="title">Program Title *</Label>
-            <Input id="title" value={formData.title} onChange={(e) => handleChange('title', e.target.value)} placeholder="e.g., Advanced React Training" disabled={isLoading}/>
+            <Input id="title" value={formData.title} onChange={(e) => handleChange('title', e.target.value)} placeholder="e.g., Advanced React Training" disabled={isLoading} maxLength={PROGRAM_TITLE_MAX}/>
+            <p className="text-xs text-slate-500">{String(formData.title || '').length}/{PROGRAM_TITLE_MAX}</p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="training_partner">Training Partner</Label>
@@ -275,8 +281,8 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
 
           <div className="space-y-2">
             <Label htmlFor="description">Description</Label>
-            <Textarea id="description" value={formData.description} onChange={(e) => handleChange('description', e.target.value)} placeholder="Program description..." disabled={isLoading} maxLength={100} className="min-h-24 resize-y break-all [overflow-wrap:anywhere]"/>
-            <p className="text-xs text-slate-500">{String(formData.description || '').length}/100</p>
+            <Textarea id="description" value={formData.description} onChange={(e) => handleChange('description', e.target.value)} placeholder="Program description..." disabled={isLoading} maxLength={PROGRAM_DESCRIPTION_MAX} className="min-h-24 resize-y break-all [overflow-wrap:anywhere]"/>
+            <p className="text-xs text-slate-500">{String(formData.description || '').length}/{PROGRAM_DESCRIPTION_MAX}</p>
           </div>
           </>)}
 
@@ -291,6 +297,10 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
               <Label htmlFor="training_period_weeks">Training Period (Weeks) *</Label>
               <Input id="training_period_weeks" type="number" min="1" step="1" value={formData.training_period_weeks} onChange={(e) => handleChange('training_period_weeks', e.target.value)} placeholder="e.g., 4" disabled={isLoading}/>
             </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="training_location">Training Location</Label>
+            <Input id="training_location" value={formData.training_location} onChange={(e) => handleChange('training_location', e.target.value)} placeholder="e.g., Kampala Centre" disabled={isLoading}/>
           </div>
           </>)}
 

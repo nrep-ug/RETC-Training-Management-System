@@ -1,6 +1,8 @@
 'use client';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Eye, Pencil, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useClientPagination } from '@/hooks/use-client-pagination';
 import { TablePaginationFooter } from '@/components/table-pagination-footer';
@@ -39,6 +41,7 @@ function getStatusBadgeStyles(status) {
     }
 }
 export function TraineeTable({ trainees, isLoading, onEdit, onDelete, isAdmin, programMap = {}, paginationResetKey = '', }) {
+    const [viewTrainee, setViewTrainee] = useState(null);
     const pagination = useClientPagination(trainees, { resetKey: paginationResetKey });
     const getStatusLabel = (status) => {
         const normalized = normalizeTraineeStatus(status);
@@ -97,7 +100,7 @@ export function TraineeTable({ trainees, isLoading, onEdit, onDelete, isAdmin, p
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Program</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Certification</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Status</th>
-            {isAdmin && <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Actions</th>}
+            <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-6 sm:py-3">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-[#047857]/10">
@@ -114,18 +117,43 @@ export function TraineeTable({ trainees, isLoading, onEdit, onDelete, isAdmin, p
                   {getStatusLabel(trainee.status)}
                 </span>
               </td>
-              {isAdmin && (<td className="space-x-2 px-3 py-3 text-sm sm:px-6 sm:py-4">
+              <td className="space-x-2 px-3 py-3 text-sm sm:px-6 sm:py-4">
+                  <Button size="sm" variant="outline" onClick={() => setViewTrainee(trainee)}>
+                    <Eye className="h-4 w-4"/>
+                  </Button>
+                  {isAdmin && (<>
                   <Button size="sm" variant="outline" onClick={() => onEdit?.(trainee)}>
                     <Pencil className="h-4 w-4"/>
                   </Button>
                   <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700" onClick={() => onDelete?.(trainee.$id)}>
                     <Trash2 className="h-4 w-4"/>
                   </Button>
-                </td>)}
+                </>)}
+                </td>
             </tr>))}
         </tbody>
       </table>
       </div>
       <TablePaginationFooter total={total} page={page} pageSize={pageSize} totalPages={totalPages} rangeFrom={rangeFrom} rangeTo={rangeTo} onPageChange={setPage} onPageSizeChange={setPageSize}/>
+      <Dialog open={!!viewTrainee} onOpenChange={(open) => {
+            if (!open)
+                setViewTrainee(null);
+        }}>
+        <DialogContent className="max-h-[90dvh] w-[calc(100vw-1.5rem)] max-w-xl overflow-y-auto border-[#047857]/25 p-0 sm:w-full">
+          <DialogHeader className="border-b border-[#047857]/15 bg-gradient-to-r from-[#047857] via-[#0b8d68] to-[#ff8829] px-6 py-4">
+            <DialogTitle className="text-xl font-bold text-white">Trainee Details</DialogTitle>
+          </DialogHeader>
+          {viewTrainee && (<div className="space-y-4 bg-gradient-to-b from-white via-white to-[#f7faf8] px-6 py-5 text-sm">
+              <div><span className="font-semibold text-slate-700">Name:</span> {viewTrainee.name || '-'}</div>
+              <div><span className="font-semibold text-slate-700">Email:</span> {viewTrainee.email || '-'}</div>
+              <div><span className="font-semibold text-slate-700">Phone:</span> {viewTrainee.phone || '-'}</div>
+              <div><span className="font-semibold text-slate-700">Gender:</span> {viewTrainee.gender || '-'}</div>
+              <div><span className="font-semibold text-slate-700">District:</span> {viewTrainee.district || '-'}</div>
+              <div><span className="font-semibold text-slate-700">Program:</span> {viewTrainee.program_name || programMap[viewTrainee.program_id] || '-'}</div>
+              <div><span className="font-semibold text-slate-700">Certification:</span> {getCertificationLabel(viewTrainee.certification_status || viewTrainee.certificationStatus)}</div>
+              <div><span className="font-semibold text-slate-700">Status:</span> {getStatusLabel(viewTrainee.status)}</div>
+            </div>)}
+        </DialogContent>
+      </Dialog>
     </div>);
 }

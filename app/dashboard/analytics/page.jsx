@@ -721,41 +721,41 @@ export default function AnalyticsPage() {
           <span className="text-xs text-slate-500 sm:text-right">Refine by period, demographics, and training partner</span>
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <Label>Year</Label>
             <p className="text-xs text-slate-500">Registration or program start year</p>
             <Select value={filters.year} onValueChange={(value) => setFilters((prev) => ({ ...prev, year: value }))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full min-w-0"><SelectValue className="truncate" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All years</SelectItem>
                 {years.map((year) => (<SelectItem key={year} value={year}>{year}</SelectItem>))}
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <Label>Program</Label>
             <Select value={filters.programId} onValueChange={(value) => setFilters((prev) => ({ ...prev, programId: value }))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full min-w-0"><SelectValue className="truncate" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All programs</SelectItem>
                 {programsRaw.map((p) => (<SelectItem key={p.$id} value={p.$id}>{p.title || 'Untitled'}</SelectItem>))}
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <Label>Training partner</Label>
             <Select value={filters.trainingPartnerId} onValueChange={(value) => setFilters((prev) => ({ ...prev, trainingPartnerId: value }))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full min-w-0"><SelectValue className="truncate" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All training partners</SelectItem>
                 {partnersRaw.map((p) => (<SelectItem key={p.$id} value={p.$id}>{p.name || 'Unnamed Partner'}</SelectItem>))}
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <Label>Gender</Label>
             <Select value={filters.gender} onValueChange={(value) => setFilters((prev) => ({ ...prev, gender: value }))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full min-w-0"><SelectValue className="truncate" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All genders</SelectItem>
                 <SelectItem value="male">Male</SelectItem>

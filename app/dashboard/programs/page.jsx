@@ -14,13 +14,19 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+const PROGRAM_TITLE_MAX = 100;
+const PROGRAM_DESCRIPTION_MAX = 400;
 function sanitizeProgramPayload(data, style = 'snake', includeDates = true) {
+    const rawTitle = String(data.title || '').trim();
+    if (rawTitle.length > PROGRAM_TITLE_MAX) {
+        throw new Error(`Program title must be ${PROGRAM_TITLE_MAX} characters or fewer.`);
+    }
     const rawDescription = String(data.description || '').trim();
-    if (rawDescription.length > 100) {
-        throw new Error('Description must be at most 100 characters.');
+    if (rawDescription.length > PROGRAM_DESCRIPTION_MAX) {
+        throw new Error(`Description must be at most ${PROGRAM_DESCRIPTION_MAX} characters.`);
     }
     const base = {
-        title: String(data.title || '').trim(),
+        title: rawTitle,
         training_partner: String(data.training_partner || '').trim(),
         description: rawDescription,
         training_location: String(data.training_location || '').trim(),
@@ -78,13 +84,13 @@ function buildProgramPayloadCandidates(data) {
     if (snake.description) {
         strictRequiredPayload.description = snake.description;
     }
-    const exactSchemaPayload = {
-        ...strictRequiredPayload,
-        training_partner: snake.training_partner,
-        training_partners: trainingPartnersValue,
-        ...(snake.training_location ? { training_location: snake.training_location, trainingLocation: snake.training_location, location: snake.training_location } : {}),
-        ...(snake.trainer_id ? { trainer_id: snake.trainer_id } : {}),
-    };
+    const strictWithOptional = { ...strictRequiredPayload };
+    if (snake.description) {
+        strictWithOptional.description = snake.description;
+    }
+    if (snake.training_location) {
+        strictWithOptional.location = snake.training_location;
+    }
     const hyphenDates = {
         ...snake,
         'start-date': snake.start_date,
@@ -107,7 +113,6 @@ function buildProgramPayloadCandidates(data) {
         hybridCapacityCamel.trainerId = snake.trainer_id;
         hybridDatesCamel.trainerId = snake.trainer_id;
         hyphenDates.trainerId = snake.trainer_id;
-        exactSchemaPayload.trainerId = snake.trainer_id;
         delete hybridCapacityCamel.trainer_id;
         delete hybridDatesCamel.trainer_id;
         delete hyphenDates.trainer_id;
@@ -132,8 +137,9 @@ function buildProgramPayloadCandidates(data) {
         maxCapacity: snake.max_capacity,
     };
     delete hyphenDatesCamelCapacity.max_capacity;
-    // Try strict required-schema payload first, then broader fallbacks.
-    return [strictRequiredPayload, exactSchemaPayload, snake, hyphenDates, hyphenDatesCamelCapacity, hybridDatesCamel, camel, hybridCapacityCamel, shortDates, atDates];
+    // Try strict schema + optional fields first so `location` persists when supported.
+    // If a schema does not include optional columns, fallback to minimal required payload.
+    return [strictWithOptional, strictRequiredPayload, snake, hyphenDates, hyphenDatesCamelCapacity, hybridDatesCamel, camel, hybridCapacityCamel, shortDates, atDates];
 }
 async function createProgramWithFallback(data) {
     const payloads = buildProgramPayloadCandidates(data);
@@ -145,6 +151,9 @@ async function createProgramWithFallback(data) {
         }
         catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
+            if (msg.includes('Attribute "max_capacity" has invalid format. Value must be a valid range between 0 and 0')) {
+                throw new Error('Appwrite schema issue: `max_capacity` is currently configured to only allow 0. Update the `max_capacity` attribute range in the programs collection (for example min 1, max 10000), then try again.');
+            }
             attemptErrors.push(`Attempt ${i + 1}: ${msg}`);
         }
     }
@@ -160,6 +169,9 @@ async function updateProgramWithFallback(programId, data) {
         }
         catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
+            if (msg.includes('Attribute "max_capacity" has invalid format. Value must be a valid range between 0 and 0')) {
+                throw new Error('Appwrite schema issue: `max_capacity` is currently configured to only allow 0. Update the `max_capacity` attribute range in the programs collection (for example min 1, max 10000), then try again.');
+            }
             attemptErrors.push(`Attempt ${i + 1}: ${msg}`);
         }
     }

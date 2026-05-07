@@ -437,28 +437,9 @@ function filterTraineesForReport(allTrainees, rf, programByMulti, pdfProgramPart
 }
 /** If the user’s filters exclude every loaded trainee, widen filters so the PDF still lists people (with toast). */
 function resolveTraineesForPdf(allTrainees, userFilters, programByMulti, pdfProgramPartnerMap, partnerDocs, trainerDocs) {
-    let rf = coalesceReportFilters(userFilters);
-    let list = filterTraineesForReport(allTrainees, rf, programByMulti, pdfProgramPartnerMap, partnerDocs, trainerDocs);
-    let widenNote = '';
-    if (list.length > 0 || allTrainees.length === 0) {
-        return { rf, trainees: list, widenNote };
-    }
-    const rfYear = { ...rf, year: 'all' };
-    list = filterTraineesForReport(allTrainees, rfYear, programByMulti, pdfProgramPartnerMap, partnerDocs, trainerDocs);
-    if (list.length > 0) {
-        return {
-            rf: rfYear,
-            trainees: list,
-            widenNote: 'Year was set to All years in this export because no trainees matched the selected year.',
-        };
-    }
-    const rfAll = coalesceReportFilters(REPORT_FILTERS_ALL);
-    list = filterTraineesForReport(allTrainees, rfAll, programByMulti, pdfProgramPartnerMap, partnerDocs, trainerDocs);
-    return {
-        rf: rfAll,
-        trainees: list,
-        widenNote: 'All filters were reset to “All” for this export because no trainees matched the selected filters.',
-    };
+    const rf = coalesceReportFilters(userFilters);
+    const list = filterTraineesForReport(allTrainees, rf, programByMulti, pdfProgramPartnerMap, partnerDocs, trainerDocs);
+    return { rf, trainees: list, widenNote: '' };
 }
 function filterProgramsForReport(allPrograms, rf, trainerDocs, partnerDocs, programPartnerMap) {
     return allPrograms.filter((p) => {
@@ -474,19 +455,9 @@ function filterProgramsForReport(allPrograms, rf, trainerDocs, partnerDocs, prog
     });
 }
 function resolveProgramsForPdf(allPrograms, userFilters, trainerDocs, partnerDocs, programPartnerMap) {
-    let rf = coalesceReportFilters(userFilters);
-    let list = filterProgramsForReport(allPrograms, rf, trainerDocs, partnerDocs, programPartnerMap);
-    if (list.length > 0 || allPrograms.length === 0) {
-        return { rf, programs: list, widenNote: '' };
-    }
-    const rfYear = { ...rf, year: 'all' };
-    list = filterProgramsForReport(allPrograms, rfYear, trainerDocs, partnerDocs, programPartnerMap);
-    if (list.length > 0) {
-        return { rf: rfYear, programs: list, widenNote: 'Year was set to All years because no programs matched the selected year.' };
-    }
-    const rfAll = coalesceReportFilters(REPORT_FILTERS_ALL);
-    list = filterProgramsForReport(allPrograms, rfAll, trainerDocs, partnerDocs, programPartnerMap);
-    return { rf: rfAll, programs: list, widenNote: 'All filters were reset to “All” because no programs matched the selection.' };
+    const rf = coalesceReportFilters(userFilters);
+    const list = filterProgramsForReport(allPrograms, rf, trainerDocs, partnerDocs, programPartnerMap);
+    return { rf, programs: list, widenNote: '' };
 }
 export default function ReportsPage() {
     const { isAdmin, isManager } = useAuth();
