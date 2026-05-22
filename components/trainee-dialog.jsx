@@ -1,11 +1,13 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { TraineeStatus } from '@/lib/types';
+import { TraineeStatus, TRAINEE_STATUS_HINT } from '@/lib/types';
+import { getTraineeLevelFormSelectOptions, getTraineeLevelFromDoc } from '@/lib/trainee-levels';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, } from '@/components/ui/select';
+import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
 export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = [], isProgramsLoading = false, }) {
     const [isLoading, setIsLoading] = useState(false);
     const [submitError, setSubmitError] = useState('');
@@ -16,6 +18,7 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
         name: '',
         phone: '',
         gender: 'Male',
+        trainee_level: '',
         program_id: '',
         status: TraineeStatus.ENROLLED,
         certification_status: 'pending',
@@ -54,6 +57,7 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
                 name: trainee.name,
                 phone: trainee.phone || '',
                 gender: normalizedGender,
+                trainee_level: getTraineeLevelFromDoc(trainee),
                 program_id: trainee.program_id || '',
                 status: trainee.status || TraineeStatus.ENROLLED,
                 certification_status: String(trainee.certification_status || trainee.certificationStatus || 'pending')
@@ -74,6 +78,7 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
                 name: '',
                 phone: '',
                 gender: 'Male',
+                trainee_level: '',
                 program_id: '',
                 status: TraineeStatus.ENROLLED,
                 certification_status: 'pending',
@@ -100,8 +105,11 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
             if (!formData.gender) {
                 return 'Gender is required.';
             }
+            if (!String(formData.trainee_level || '').trim()) {
+                return 'Participant level is required (Beginner, Technician, or Trainer).';
+            }
             if (!String(formData.program_id || '').trim()) {
-                return 'Program is required.';
+                return `${COURSE_MODULE_LABELS.enrollmentLabel} is required.`;
             }
             if (!String(formData.status || '').trim()) {
                 return 'Status is required.';
@@ -160,8 +168,8 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
         setCurrentStep((prev) => Math.max(prev - 1, 1));
     };
     return (<Dialog open={open} onOpenChange={onOpenChange} modal={false}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[min(90dvh,720px)] w-[calc(100vw-2rem)] max-w-md flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="shrink-0 border-b px-6 py-4 pr-12">
           <DialogTitle>{trainee ? 'Edit Trainee' : 'Add New Trainee'}</DialogTitle>
           <DialogDescription>
             {trainee
@@ -175,7 +183,8 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
             if (currentStep < totalSteps)
                 return;
             void handleSubmit(e);
-        }} className="space-y-4">
+        }} className="flex min-h-0 flex-1 flex-col">
+          <div className="shrink-0 space-y-3 px-6 pt-4">
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs font-medium text-slate-500">
               <span>Step {currentStep} of {totalSteps}</span>
@@ -204,6 +213,9 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
               {submitError}
             </div>
           )}
+          </div>
+
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-3">
           {currentStep === 1 && (<>
           <div className="space-y-2">
             <Label htmlFor="name">Full Name *</Label>
@@ -223,6 +235,21 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
 
           {currentStep === 2 && (<>
           <div className="space-y-2">
+            <Label htmlFor="trainee_level">Participant level *</Label>
+            <p className="text-xs leading-snug text-slate-500">Beginner: new to the field. Technician: practicing or refresher. Trainer: delivers or supports training.</p>
+            <Select value={formData.trainee_level || 'none'} onValueChange={(value) => handleChange('trainee_level', value === 'none' ? '' : value)}>
+              <SelectTrigger disabled={isLoading}>
+                <SelectValue placeholder="Select level" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none" disabled>Select level</SelectItem>
+                {getTraineeLevelFormSelectOptions().map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
             <Label htmlFor="gender">Gender *</Label>
             <Select value={formData.gender} onValueChange={(value) => handleChange('gender', value)}>
               <SelectTrigger disabled={isLoading}>
@@ -236,37 +263,38 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="program_id">Program *</Label>
+            <Label htmlFor="program_id">{COURSE_MODULE_LABELS.enrollmentLabel} *</Label>
             <Select value={formData.program_id} onValueChange={(value) => handleChange('program_id', value)}>
               <SelectTrigger disabled={isLoading || isProgramsLoading || programs.length === 0}>
                 <SelectValue placeholder={isProgramsLoading
-                    ? 'Loading programs...'
+                    ? COURSE_MODULE_LABELS.loading
                     : programs.length === 0
-                        ? 'No programs available'
-                        : 'Select program'}/>
+                        ? `No ${COURSE_MODULE_LABELS.modulePlural} available`
+                        : `Select ${COURSE_MODULE_LABELS.moduleSingular}`}/>
               </SelectTrigger>
               <SelectContent>
                 {programs.map((program) => (
                   <SelectItem key={program.$id} value={program.$id}>
-                    {program.title || program.name || program.program_name || `Program ${program.$id}`}
+                    {program.title || program.name || program.program_name || `${COURSE_MODULE_LABELS.enrollmentLabel} ${program.$id}`}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             {!isProgramsLoading && programs.length === 0 && (
               <p className="text-xs text-amber-700">
-                No programs found. Create a program first, then add trainees.
+                {`No ${COURSE_MODULE_LABELS.modulePlural} found. Create a ${COURSE_MODULE_LABELS.moduleSingular} first, then add trainees.`}
               </p>
             )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="status">Status *</Label>
+            <p className="text-xs leading-snug text-slate-500">{TRAINEE_STATUS_HINT}</p>
             <Select value={formData.status} onValueChange={(value) => handleChange('status', value)}>
               <SelectTrigger disabled={isLoading}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={TraineeStatus.ENROLLED}>Enrolled</SelectItem>
+                <SelectItem value={TraineeStatus.ENROLLED}>Currently Enrolled</SelectItem>
                 <SelectItem value={TraineeStatus.IN_PROGRESS}>In Progress</SelectItem>
                 <SelectItem value={TraineeStatus.COMPLETED}>Completed</SelectItem>
                 <SelectItem value={TraineeStatus.DROPPED}>Dropped</SelectItem>
@@ -322,8 +350,9 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
               <Input id="consent_date" type="date" value={formData.consent_date} onChange={(e) => handleChange('consent_date', e.target.value)} disabled={isLoading}/>
             </div>)}
           </>)}
+          </div>
 
-          <div className="flex gap-3 pt-4">
+          <div className="flex shrink-0 gap-3 border-t bg-background px-6 py-4">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isLoading} className="flex-1">
               Cancel
             </Button>

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, } from '@/components/ui/select';
+import { getRetcFacilitatorRoleLabel, RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
 export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = [], isPartnersLoading = false, }) {
     const [isLoading, setIsLoading] = useState(false);
     const [submitError, setSubmitError] = useState('');
@@ -64,7 +65,7 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
     const validateStep = (step) => {
         if (step === 1) {
             if (!String(formData.name || '').trim()) {
-                return 'Trainer name is required.';
+                return `${RETC_FACILITATOR_LABELS.moduleSingular} name is required.`;
             }
             const years = Number(formData.years_of_experience);
             if (!Number.isInteger(years) || years < 0) {
@@ -99,7 +100,7 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
         }
         catch (error) {
             console.error('Error saving trainer:', error);
-            setSubmitError(error instanceof Error ? error.message : 'Failed to save trainer.');
+            setSubmitError(error instanceof Error ? error.message : `Failed to save ${RETC_FACILITATOR_LABELS.moduleSingular}.`);
         }
         finally {
             setIsLoading(false);
@@ -124,9 +125,9 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
     return (<Dialog open={open} onOpenChange={onOpenChange} modal={false}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{trainer ? 'Edit Trainer' : 'Add New Trainer'}</DialogTitle>
+          <DialogTitle>{trainer ? RETC_FACILITATOR_LABELS.editTitle : RETC_FACILITATOR_LABELS.addTitle}</DialogTitle>
           <DialogDescription>
-            {trainer ? 'Update trainer information' : 'Create a new trainer record'}
+            {trainer ? `Update ${RETC_FACILITATOR_LABELS.moduleSingular} information` : `Create a new ${RETC_FACILITATOR_LABELS.moduleSingular} record`}
           </DialogDescription>
         </DialogHeader>
 
@@ -167,7 +168,7 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
           {currentStep === 1 && (<>
           <div className="space-y-2">
             <Label htmlFor="name">Name *</Label>
-            <Input id="name" value={formData.name} onChange={(e) => handleChange('name', e.target.value)} placeholder="Trainer name" disabled={isLoading}/>
+            <Input id="name" value={formData.name} onChange={(e) => handleChange('name', e.target.value)} placeholder={`${RETC_FACILITATOR_LABELS.moduleSingular} name`} disabled={isLoading}/>
           </div>
 
           <div className="space-y-2">
@@ -181,10 +182,10 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="training_partner">Training Partner *</Label>
+            <Label htmlFor="training_partner">Partner *</Label>
             <Select value={formData.training_partner || ''} onValueChange={(value) => handleChange('training_partner', value)}>
               <SelectTrigger disabled={isLoading || isPartnersLoading}>
-                <SelectValue placeholder={isPartnersLoading ? 'Loading partners...' : 'Select training partner'} />
+                <SelectValue placeholder={isPartnersLoading ? 'Loading partners...' : 'Select partner'} />
               </SelectTrigger>
               <SelectContent>
                 {partners.map((partner) => (<SelectItem key={partner.$id} value={partner.name}>
@@ -202,8 +203,8 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="trainer">Trainer</SelectItem>
-                  <SelectItem value="senior_trainer">Senior Trainer</SelectItem>
+                  <SelectItem value="trainer">{getRetcFacilitatorRoleLabel('trainer')}</SelectItem>
+                  <SelectItem value="senior_trainer">{getRetcFacilitatorRoleLabel('senior_trainer')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -247,7 +248,7 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
                 }} disabled={isLoading} className="flex-1">
                 Next
               </Button>) : (<Button type="submit" disabled={isLoading} className="flex-1">
-                {isLoading ? 'Saving...' : 'Save Trainer'}
+                {isLoading ? 'Saving...' : RETC_FACILITATOR_LABELS.saveButton}
               </Button>)}
           </div>
         </form>

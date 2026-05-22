@@ -18,7 +18,7 @@ export function Navbar({ onMenuClick }) {
         <Button type="button" variant="ghost" size="icon" className="shrink-0 lg:hidden" onClick={() => onMenuClick?.()} aria-label="Open navigation menu">
           <Menu className="h-5 w-5 text-[#047857]"/>
         </Button>
-        <h1 className="truncate text-base font-bold text-[#047857] sm:text-xl md:text-2xl">RETC Training System</h1>
+        <h1 className="truncate text-base font-bold text-[#047857] sm:text-xl md:text-2xl">RETC Training Management System</h1>
       </div>
       
       <div className="flex shrink-0 items-center gap-2 sm:gap-4">

@@ -9,12 +9,12 @@ export function PartnerTable({ partners, isLoading, isAdmin, onEdit, onDelete, p
     if (isLoading) {
         return (<div className="p-8 text-center">
         <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-b-2 border-[#047857]"></div>
-        <p className="text-gray-600">Loading training partners...</p>
+        <p className="text-gray-600">Loading partners...</p>
       </div>);
     }
     if (partners.length === 0) {
         return (<div className="p-8 text-center">
-        <p className="text-gray-600">No training partners found. {isAdmin && 'Create one to get started.'}</p>
+        <p className="text-gray-600">No partners found. {isAdmin && 'Create one to get started.'}</p>
       </div>);
     }
     const { pagedItems, page, setPage, pageSize, setPageSize, total, totalPages, rangeFrom, rangeTo, } = pagination;

@@ -7,7 +7,7 @@ import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { cn } from '@/lib/utils';
-import { LayoutDashboard, Users, UserRoundCog, BookOpen, BarChart3, FileText, } from 'lucide-react';
+import { LayoutDashboard, Users, UserRoundCog, BookOpen, BarChart3, FileText, CalendarDays, } from 'lucide-react';
 import { Handshake } from 'lucide-react';
 export function Sidebar({ onNavigate, className }) {
     const pathname = usePathname();
@@ -26,9 +26,15 @@ export function Sidebar({ onNavigate, className }) {
             visible: true,
         },
         {
-            label: 'Programs',
+            label: 'Courses',
             href: '/dashboard/programs',
             icon: BookOpen,
+            visible: true,
+        },
+        {
+            label: 'Facility calendar',
+            href: '/dashboard/facility-calendar',
+            icon: CalendarDays,
             visible: true,
         },
         {
@@ -38,7 +44,7 @@ export function Sidebar({ onNavigate, className }) {
             visible: true,
         },
         {
-            label: 'Trainers',
+            label: 'RETC Facilitators',
             href: '/dashboard/trainers',
             icon: UserRoundCog,
             visible: true,

@@ -2,7 +2,7 @@ import { LoginForm } from '@/components/login-form';
 import Image from 'next/image';
 import { BriefcaseBusiness, ChartColumnIncreasing, ShieldCheck } from 'lucide-react';
 export const metadata = {
-    title: 'Login - RETC Training System',
+    title: 'Login - RETC Training Management System',
     description: 'Login to RETC Training Management System',
 };
 export default function LoginPage() {
@@ -15,17 +15,17 @@ export default function LoginPage() {
           <div className="pointer-events-none absolute -right-7 top-1/2 hidden h-20 w-20 -translate-y-1/2 rounded-full bg-orange-200/70 md:block"/>
           <div className="relative">
             <div className="mb-5 inline-flex rounded-full border border-emerald-300/40 bg-emerald-300/10 px-3 py-1 text-xs font-medium tracking-wide text-emerald-100">
-              RETC Training Management
+              RETC Training Management System
             </div>
             <h1 className="max-w-lg text-4xl font-bold leading-tight sm:text-5xl">
-              Welcome to RETC Training System
+              Welcome to RETC Training Management System
             </h1>
             <p className="mt-4 max-w-md text-emerald-100/90">
               Empowering teams with practical training, skills development, and measurable performance outcomes.
             </p>
             <div className="mt-9 space-y-4">
               <FeatureItem icon={BriefcaseBusiness} title="Trainee Management" text="Register trainees, update profiles, track status, and manage imports from a single workspace."/>
-              <FeatureItem icon={ChartColumnIncreasing} title="Programs and Analytics" text="Create training programs, monitor completion trends, and review dashboard metrics for better planning."/>
+              <FeatureItem icon={ChartColumnIncreasing} title="Courses and Analytics" text="Create training courses, monitor completion trends, and review dashboard metrics for better planning."/>
               <FeatureItem icon={ShieldCheck} title="Reports and Compliance" text="Generate training reports, keep auditable records, and support role-based access for administrators and managers."/>
             </div>
           </div>
