@@ -1,9 +1,22 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { Query } from 'appwrite';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
 import { ProgramStatus } from '@/lib/types';
+import { assertValidCourseKey, getCourseKeyFromProgram, getCourseLabel, getCourseFilterSelectOptions, programMatchesCourseFilter, } from '@/lib/renewable-energy-courses';
+import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
+import { RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
+import {
+    getPartnerIdFromPartnerJoin,
+    getProgramIdFromPartnerJoin,
+} from '@/lib/program-partner-assignments';
+import {
+    buildOptimisticProgramPartnerMapEntry,
+    buildProgramPartnerMapFromRows,
+    syncProgramPartnerLinks,
+} from '@/lib/program-partner-sync';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Plus } from 'lucide-react';
@@ -19,14 +32,16 @@ const PROGRAM_DESCRIPTION_MAX = 400;
 function sanitizeProgramPayload(data, style = 'snake', includeDates = true) {
     const rawTitle = String(data.title || '').trim();
     if (rawTitle.length > PROGRAM_TITLE_MAX) {
-        throw new Error(`Program title must be ${PROGRAM_TITLE_MAX} characters or fewer.`);
+        throw new Error(`Course title must be ${PROGRAM_TITLE_MAX} characters or fewer.`);
     }
     const rawDescription = String(data.description || '').trim();
     if (rawDescription.length > PROGRAM_DESCRIPTION_MAX) {
         throw new Error(`Description must be at most ${PROGRAM_DESCRIPTION_MAX} characters.`);
     }
+    const course = assertValidCourseKey(data.course);
     const base = {
         title: rawTitle,
+        course,
         training_partner: String(data.training_partner || '').trim(),
         description: rawDescription,
         training_location: String(data.training_location || '').trim(),
@@ -52,7 +67,7 @@ function sanitizeProgramPayload(data, style = 'snake', includeDates = true) {
         base.maxCapacity = capacity;
     }
     if (!base.title) {
-        throw new Error('Program title is required.');
+        throw new Error(COURSE_MODULE_LABELS.titleRequired);
     }
     if (includeDates && (!(base.start_date || base.startDate) || !(base.end_date || base.endDate))) {
         throw new Error('Start date and end date are required.');
@@ -75,6 +90,7 @@ function buildProgramPayloadCandidates(data) {
     }
     const strictRequiredPayload = {
         title: snake.title,
+        course: snake.course,
         status: snake.status,
         max_capacity: snake.max_capacity,
         'start-date': snake.start_date,
@@ -141,6 +157,13 @@ function buildProgramPayloadCandidates(data) {
     // If a schema does not include optional columns, fallback to minimal required payload.
     return [strictWithOptional, strictRequiredPayload, snake, hyphenDates, hyphenDatesCamelCapacity, hybridDatesCamel, camel, hybridCapacityCamel, shortDates, atDates];
 }
+function isUnknownCourseAttributeError(message) {
+    const msg = String(message || '');
+    return /Unknown attribute:\s*["']course["']/i.test(msg);
+}
+function throwCourseAttributeSetupError() {
+    throw new Error('Appwrite does not have a `course` attribute (course category) on your courses collection yet. In Appwrite Console → Database → programs collection → Attributes, create an Enum named exactly `course` with the six catalogue keys, click Update/Create, then refresh this page. Also confirm NEXT_PUBLIC_APPWRITE_PROGRAMS_COLLECTION_ID in .env.local matches that collection.');
+}
 async function createProgramWithFallback(data) {
     const payloads = buildProgramPayloadCandidates(data);
     const attemptErrors = [];
@@ -154,10 +177,13 @@ async function createProgramWithFallback(data) {
             if (msg.includes('Attribute "max_capacity" has invalid format. Value must be a valid range between 0 and 0')) {
                 throw new Error('Appwrite schema issue: `max_capacity` is currently configured to only allow 0. Update the `max_capacity` attribute range in the programs collection (for example min 1, max 10000), then try again.');
             }
+            if (isUnknownCourseAttributeError(msg)) {
+                throwCourseAttributeSetupError();
+            }
             attemptErrors.push(`Attempt ${i + 1}: ${msg}`);
         }
     }
-    throw new Error(`Failed to create program. Please verify required program attributes in Appwrite (including start-date, end-time, max_capacity, and training-partners). ${attemptErrors.join(' | ')}`);
+    throw new Error(`Failed to create ${COURSE_MODULE_LABELS.moduleSingular}. Please verify required course attributes in Appwrite (including start-date, end-time, max_capacity, and training-partners). ${attemptErrors.join(' | ')}`);
 }
 async function updateProgramWithFallback(programId, data) {
     const payloads = buildProgramPayloadCandidates(data);
@@ -172,10 +198,13 @@ async function updateProgramWithFallback(programId, data) {
             if (msg.includes('Attribute "max_capacity" has invalid format. Value must be a valid range between 0 and 0')) {
                 throw new Error('Appwrite schema issue: `max_capacity` is currently configured to only allow 0. Update the `max_capacity` attribute range in the programs collection (for example min 1, max 10000), then try again.');
             }
+            if (isUnknownCourseAttributeError(msg)) {
+                throwCourseAttributeSetupError();
+            }
             attemptErrors.push(`Attempt ${i + 1}: ${msg}`);
         }
     }
-    throw new Error(`Failed to update program. Please verify required program attributes in Appwrite (including start-date, end-time, max_capacity, and training-partners). ${attemptErrors.join(' | ')}`);
+    throw new Error(`Failed to update ${COURSE_MODULE_LABELS.moduleSingular}. Please verify required course attributes in Appwrite (including start-date, end-time, max_capacity, and training-partners). ${attemptErrors.join(' | ')}`);
 }
 function normalizeProgramDoc(program) {
     const createdFallback = program.$createdAt ? new Date(program.$createdAt).toISOString() : '';
@@ -213,6 +242,8 @@ function normalizeProgramDoc(program) {
             ? (program.trainer.name || program.trainer.email || '')
             : (program.trainer_name || program.trainerName || ''),
         status: String(program.status || ProgramStatus.UPCOMING).toLowerCase(),
+        course: getCourseKeyFromProgram(program),
+        course_label: getCourseLabel(getCourseKeyFromProgram(program)),
     };
 }
 function getRelationshipId(value) {
@@ -224,23 +255,6 @@ function getRelationshipId(value) {
         return value.$id || value.documentId || value.id || '';
     }
     return '';
-}
-function getProgramIdFromPartnerJoin(row) {
-    return getRelationshipId(row.program_id || row.programId || row.program);
-}
-function getPartnerIdFromPartnerJoin(row) {
-    return getRelationshipId(row.partner_id || row.partnerId || row.partner);
-}
-function getPartnerTypeFromPartnerJoin(row) {
-    let s = String(row.partner_type || row.partnerType || row.type || row.role || 'partner')
-        .trim()
-        .toLowerCase()
-        .replace(/[\s-]+/g, '_');
-    if (s === 'trainingpartner')
-        s = 'training_partner';
-    if (s === 'primary' || s === 'main')
-        s = 'training_partner';
-    return s === 'training_partner' ? 'training_partner' : 'partner';
 }
 /** Paginate past Appwrite default list limits so every program–partner link is loaded. */
 async function fetchAllCollectionDocuments(collectionId, { maxDocs = 50000, pageSize = 250 } = {}) {
@@ -287,14 +301,6 @@ async function listProgramPartnerJoinsForProgram(programId) {
     const all = await fetchAllCollectionDocuments(COLLECTIONS.PROGRAM_PARTNERS);
     return all.filter((row) => getProgramIdFromPartnerJoin(row) === pid);
 }
-function buildProgramPartnerPayloadCandidates(programId, partnerId, partnerType) {
-    return [
-        { program_id: programId, partner_id: partnerId, partner_type: partnerType },
-        { programId: programId, partnerId: partnerId, partnerType: partnerType },
-        { program_id: programId, partner_id: partnerId, type: partnerType },
-        { program: programId, partner: partnerId, role: partnerType },
-    ];
-}
 function buildBackfillProgramData(program) {
     const normalized = normalizeProgramDoc(program);
     const startBase = normalized.start_date
@@ -304,22 +310,26 @@ function buildBackfillProgramData(program) {
         ? new Date(normalized.end_date)
         : new Date(startBase.getTime() + (30 * 24 * 60 * 60 * 1000));
     return {
-        title: normalized.title || 'Untitled Program',
+        title: normalized.title || 'Untitled Course',
         training_partner: normalized.training_partner || '',
         description: normalized.description || '',
         training_location: normalized.training_location || '',
         max_capacity: Number(normalized.max_capacity) || 1,
         status: normalized.status || ProgramStatus.UPCOMING,
+        course: normalized.course || getCourseKeyFromProgram(program),
         start_date: startBase.toISOString(),
         end_date: endBase.toISOString(),
     };
 }
 export default function ProgramsPage() {
     const { isAdmin } = useAuth();
+    const router = useRouter();
+    const searchParams = useSearchParams();
     const [programs, setPrograms] = useState([]);
     const [trainers, setTrainers] = useState([]);
     const [partners, setPartners] = useState([]);
     const [programPartnerMap, setProgramPartnerMap] = useState({});
+    const partnerFetchSeqRef = useRef(0);
     const [isTrainersLoading, setIsTrainersLoading] = useState(false);
     const [isPartnersLoading, setIsPartnersLoading] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
@@ -329,6 +339,7 @@ export default function ProgramsPage() {
     const [filters, setFilters] = useState({
         query: '',
         status: 'all',
+        course: 'all',
         trainerId: 'all',
         partner: 'all',
         fromDate: '',
@@ -340,12 +351,16 @@ export default function ProgramsPage() {
         fetchPartners();
     }, []);
     useEffect(() => {
+        if (!isAdmin || searchParams.get('book') !== '1')
+            return;
+        setSelectedProgram(null);
+        setShowDialog(true);
+        router.replace('/dashboard/programs');
+    }, [isAdmin, searchParams, router]);
+    useEffect(() => {
         const programIds = programs.map((p) => p.$id).filter(Boolean);
         if (programIds.length > 0 && COLLECTIONS.PROGRAM_PARTNERS) {
             fetchProgramPartnerAssignments(programIds);
-        }
-        else {
-            setProgramPartnerMap({});
         }
     }, [
         programs.map((p) => `${p.$id}:${p.$updatedAt || p.$createdAt || ''}`).join('|'),
@@ -391,7 +406,7 @@ export default function ProgramsPage() {
         try {
             setIsLoading(true);
             if (!databases || !DB_ID || !COLLECTIONS.PROGRAMS) {
-                throw new Error('Programs collection is not configured. Check your Appwrite environment variables.');
+                throw new Error('Courses collection is not configured. Check your Appwrite environment variables.');
             }
             const response = await databases.listDocuments(DB_ID, COLLECTIONS.PROGRAMS);
             const withDates = await Promise.all(response.documents.map(async (program) => {
@@ -416,7 +431,7 @@ export default function ProgramsPage() {
         catch (error) {
             console.error('Error fetching programs:', error);
             toast({
-                title: 'Unable to load programs',
+                title: `Unable to load ${COURSE_MODULE_LABELS.modulePlural}`,
                 description: error instanceof Error ? error.message : 'Please verify Appwrite configuration.',
                 variant: 'destructive',
             });
@@ -425,104 +440,40 @@ export default function ProgramsPage() {
             setIsLoading(false);
         }
     };
-    const fetchProgramPartnerAssignments = async (programIds, programsSnapshot = programs) => {
+    const applyProgramPartnerMap = (nextMap, fetchSeq) => {
+        if (fetchSeq !== partnerFetchSeqRef.current)
+            return;
+        setProgramPartnerMap((prev) => ({ ...prev, ...nextMap }));
+    };
+    const fetchProgramPartnerAssignments = async (programIds, programsSnapshot = programs, partnersSnapshot = partners) => {
         if (!COLLECTIONS.PROGRAM_PARTNERS) {
-            setProgramPartnerMap({});
             return;
         }
+        const fetchSeq = ++partnerFetchSeqRef.current;
         try {
             const allRows = await fetchAllCollectionDocuments(COLLECTIONS.PROGRAM_PARTNERS);
-            const byProgram = {};
-            allRows.forEach((row) => {
-                const programId = getProgramIdFromPartnerJoin(row);
-                const partnerId = getPartnerIdFromPartnerJoin(row);
-                if (!programId || !partnerId)
-                    return;
-                if (!byProgram[programId]) {
-                    byProgram[programId] = { trainingPartnerId: '', partnerIds: [] };
-                }
-                const type = getPartnerTypeFromPartnerJoin(row);
-                if (type === 'training_partner') {
-                    byProgram[programId].trainingPartnerId = partnerId;
-                }
-                else if (!byProgram[programId].partnerIds.includes(partnerId)) {
-                    byProgram[programId].partnerIds.push(partnerId);
-                }
-            });
-            const partnerById = {};
-            partners.forEach((p) => {
-                const label = String(p.name || p.email || p.$id || '').trim();
-                const id = String(p.$id || '').trim();
-                if (id)
-                    partnerById[id] = label;
-                const docId = String(p.documentId || '').trim();
-                if (docId)
-                    partnerById[docId] = label;
-            });
-            const nextMap = {};
-            programIds.forEach((programId) => {
-                const assignment = byProgram[programId] || { trainingPartnerId: '', partnerIds: [] };
-                const fallbackProgram = programsSnapshot.find((p) => p.$id === programId);
-                const fallbackTrainingPartner = fallbackProgram
-                    ? (fallbackProgram.training_partner
-                        || fallbackProgram.trainingPartner
-                        || fallbackProgram['training-partners']
-                        || fallbackProgram.training_partners
-                        || '')
-                    : '';
-                const trainingPartnerName = partnerById[assignment.trainingPartnerId] || fallbackTrainingPartner;
-                nextMap[programId] = {
-                    training_partner_id: assignment.trainingPartnerId || '',
-                    training_partner: trainingPartnerName,
-                    partner_ids: assignment.partnerIds,
-                    partner_names: assignment.partnerIds.map((id) => partnerById[id]).filter(Boolean),
-                };
-            });
-            setProgramPartnerMap(nextMap);
+            if (fetchSeq !== partnerFetchSeqRef.current)
+                return;
+            const nextMap = buildProgramPartnerMapFromRows(allRows, programIds, programsSnapshot, partnersSnapshot);
+            applyProgramPartnerMap(nextMap, fetchSeq);
         }
         catch (error) {
             console.error('Error fetching program-partner assignments:', error);
-            setProgramPartnerMap({});
         }
     };
     const syncProgramPartners = async (programId, data) => {
         if (!COLLECTIONS.PROGRAM_PARTNERS || !programId)
             return;
-        const mainPartnerId = String(data.training_partner_id || '').trim();
-        const additionalPartnerIds = Array.from(new Set((Array.isArray(data.partner_ids) ? data.partner_ids : [])
-            .map((id) => String(id || '').trim())
-            .filter(Boolean)
-            .filter((id) => id !== mainPartnerId)));
-        const desired = [];
-        if (mainPartnerId) {
-            desired.push({ partnerId: mainPartnerId, partnerType: 'training_partner' });
-        }
-        additionalPartnerIds.forEach((partnerId) => {
-            desired.push({ partnerId, partnerType: 'partner' });
-        });
         const existingForProgram = await listProgramPartnerJoinsForProgram(programId);
-        for (const row of existingForProgram) {
-            await databases.deleteDocument(DB_ID, COLLECTIONS.PROGRAM_PARTNERS, row.$id);
-        }
-        for (const row of desired) {
-            const payloads = buildProgramPartnerPayloadCandidates(programId, row.partnerId, row.partnerType);
-            let created = false;
-            for (let i = 0; i < payloads.length; i++) {
-                try {
-                    await databases.createDocument(DB_ID, COLLECTIONS.PROGRAM_PARTNERS, 'unique()', payloads[i]);
-                    created = true;
-                    break;
-                }
-                catch (error) {
-                    if (i === payloads.length - 1) {
-                        throw error;
-                    }
-                }
-            }
-            if (!created) {
-                throw new Error('Failed to create program partner assignment.');
-            }
-        }
+        await syncProgramPartnerLinks(databases, DB_ID, COLLECTIONS.PROGRAM_PARTNERS, programId, data, existingForProgram);
+    };
+    const patchProgramPartnerMapForProgram = (programId, data, programsSnapshot = programs) => {
+        if (!programId)
+            return;
+        setProgramPartnerMap((prev) => ({
+            ...prev,
+            [programId]: buildOptimisticProgramPartnerMapEntry(programId, data, partners, programsSnapshot),
+        }));
     };
     const handleAddProgram = () => {
         setSelectedProgram(null);
@@ -530,9 +481,26 @@ export default function ProgramsPage() {
     };
     const handleEditProgram = (program) => {
         const mapped = programPartnerMap[program.$id] || {};
-        setSelectedProgram({ ...program, ...mapped });
+        setSelectedProgram({ ...normalizeProgramDoc(program), ...mapped });
         setShowDialog(true);
     };
+    useEffect(() => {
+        if (!showDialog)
+            return;
+        setSelectedProgram((prev) => {
+            if (!prev?.$id)
+                return prev;
+            const mapped = programPartnerMap[prev.$id];
+            if (!mapped)
+                return prev;
+            const prevIds = (Array.isArray(prev.partner_ids) ? prev.partner_ids : []).join(',');
+            const nextIds = (Array.isArray(mapped.partner_ids) ? mapped.partner_ids : []).join(',');
+            if (prevIds === nextIds
+                && String(prev.training_partner_id || '') === String(mapped.training_partner_id || ''))
+                return prev;
+            return { ...prev, ...mapped };
+        });
+    }, [programPartnerMap, showDialog]);
     const handleDeleteProgram = async (id) => {
         setPendingDeleteId(id);
     };
@@ -550,15 +518,15 @@ export default function ProgramsPage() {
             await databases.deleteDocument(DB_ID, COLLECTIONS.PROGRAMS, pendingDeleteId);
             setPrograms(programs.filter(p => p.$id !== pendingDeleteId));
             toast({
-                title: 'Program deleted',
-                description: 'The training program was removed successfully.',
+                title: 'Course deleted',
+                description: `The ${COURSE_MODULE_LABELS.moduleSingular} was removed successfully.`,
             });
         }
         catch (error) {
             console.error('Error deleting program:', error);
             toast({
                 title: 'Delete failed',
-                description: error instanceof Error ? error.message : 'Could not delete program.',
+                description: error instanceof Error ? error.message : `Could not delete ${COURSE_MODULE_LABELS.moduleSingular}.`,
                 variant: 'destructive',
             });
         }
@@ -569,9 +537,11 @@ export default function ProgramsPage() {
     const handleSaveProgram = async (data) => {
         try {
             if (!databases || !DB_ID || !COLLECTIONS.PROGRAMS) {
-                throw new Error('Programs collection is not configured. Check your Appwrite environment variables.');
+                throw new Error('Courses collection is not configured. Check your Appwrite environment variables.');
             }
-            const selectedPartner = partners.find((p) => p.$id === data.training_partner_id);
+            partnerFetchSeqRef.current += 1;
+            const selectedPartner = partners.find((p) => p.$id === data.training_partner_id
+                || p.documentId === data.training_partner_id);
             const selectedPartnerName = selectedPartner?.name || String(data.training_partner || '').trim();
             const payloadData = {
                 ...data,
@@ -587,6 +557,7 @@ export default function ProgramsPage() {
                     ? normalizeProgramDoc({ ...updated, ...data, training_partner: selectedPartner?.name || '' })
                     : p));
                 setPrograms(nextPrograms);
+                patchProgramPartnerMapForProgram(selectedProgram.$id, data, nextPrograms);
                 if (COLLECTIONS.PROGRAM_PARTNERS) {
                     await fetchProgramPartnerAssignments(nextPrograms.map((p) => p.$id).filter(Boolean), nextPrograms);
                 }
@@ -597,6 +568,7 @@ export default function ProgramsPage() {
                 await syncProgramPartners(response.$id, data);
                 const nextPrograms = [...programs, normalizeProgramDoc({ ...response, ...data, training_partner: selectedPartner?.name || '' })];
                 setPrograms(nextPrograms);
+                patchProgramPartnerMapForProgram(response.$id, data, nextPrograms);
                 if (COLLECTIONS.PROGRAM_PARTNERS) {
                     await fetchProgramPartnerAssignments(nextPrograms.map((p) => p.$id).filter(Boolean), nextPrograms);
                 }
@@ -604,15 +576,15 @@ export default function ProgramsPage() {
             setShowDialog(false);
             setSelectedProgram(null);
             toast({
-                title: selectedProgram ? 'Program updated' : 'Program added',
+                title: selectedProgram ? 'Course updated' : 'Course added',
                 description: selectedProgram
-                    ? 'Program changes were saved successfully.'
-                    : 'New program created successfully.',
+                    ? 'Course changes were saved successfully.'
+                    : `New ${COURSE_MODULE_LABELS.moduleSingular} created successfully.`,
             });
         }
         catch (error) {
             console.error('Error saving program:', error);
-            const message = error instanceof Error ? error.message : 'Failed to save program.';
+            const message = error instanceof Error ? error.message : `Failed to save ${COURSE_MODULE_LABELS.moduleSingular}.`;
             toast({
                 title: 'Save failed',
                 description: message,
@@ -647,6 +619,7 @@ export default function ProgramsPage() {
                 || String(p.training_location || '').toLowerCase().includes(q)
                 || String(p.description || '').toLowerCase().includes(q);
             const matchesStatus = filters.status === 'all' || String(p.status || '').toLowerCase() === filters.status;
+            const matchesCourse = programMatchesCourseFilter(p, filters.course);
             const matchesTrainer = filters.trainerId === 'all' || String(p.trainer_id || '') === filters.trainerId;
             const mainPartnerId = p.training_partner_id || programPartnerMap[p.$id]?.training_partner_id || '';
             const matchesPartner = filters.partner === 'all' || String(mainPartnerId) === filters.partner;
@@ -655,25 +628,36 @@ export default function ProgramsPage() {
             const toDate = filters.toDate ? new Date(filters.toDate) : null;
             const matchesFrom = !fromDate || !startDate || startDate >= fromDate;
             const matchesTo = !toDate || !startDate || startDate <= toDate;
-            return matchesQuery && matchesStatus && matchesTrainer && matchesPartner && matchesFrom && matchesTo;
+            return matchesQuery && matchesStatus && matchesCourse && matchesTrainer && matchesPartner && matchesFrom && matchesTo;
         });
     }, [programsWithPartnerAssignments, filters, programPartnerMap]);
     return (<div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex flex-col gap-4 sm:mb-8 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl lg:text-4xl">Training Programs</h1>
-          <p className="mt-2 text-gray-600">Manage and organize training programs</p>
+          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl lg:text-4xl">{COURSE_MODULE_LABELS.moduleTitle}</h1>
+          <p className="mt-2 text-gray-600">{COURSE_MODULE_LABELS.manageDescription}</p>
         </div>
         {isAdmin && (<Button className="w-full shrink-0 sm:w-auto" onClick={handleAddProgram}>
             <Plus className="mr-2 h-4 w-4"/>
-            Add Program
+            {COURSE_MODULE_LABELS.addButton}
           </Button>)}
       </div>
       <Card className="mb-6 p-4">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-6">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-7">
           <div className="space-y-2 md:col-span-2">
             <Label>Search</Label>
             <Input placeholder="Search title or description" value={filters.query} onChange={(e) => setFilters((prev) => ({ ...prev, query: e.target.value }))}/>
+          </div>
+          <div className="space-y-2">
+            <Label>{COURSE_MODULE_LABELS.categoryFilterLabel}</Label>
+            <Select value={filters.course} onValueChange={(value) => setFilters((prev) => ({ ...prev, course: value }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {getCourseFilterSelectOptions().map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-2">
             <Label>Status</Label>
@@ -688,17 +672,17 @@ export default function ProgramsPage() {
             </Select>
           </div>
           <div className="space-y-2">
-            <Label>Lead Trainer</Label>
+            <Label>{RETC_FACILITATOR_LABELS.leadOnCourse}</Label>
             <Select value={filters.trainerId} onValueChange={(value) => setFilters((prev) => ({ ...prev, trainerId: value }))}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All trainers</SelectItem>
+                <SelectItem value="all">{RETC_FACILITATOR_LABELS.filterAll}</SelectItem>
                 {trainers.map((t) => (<SelectItem key={t.$id} value={t.$id}>{t.name || t.email || t.$id}</SelectItem>))}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-2">
-            <Label>Training Partner</Label>
+            <Label>Partner</Label>
             <Select value={filters.partner} onValueChange={(value) => setFilters((prev) => ({ ...prev, partner: value }))}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -731,9 +715,9 @@ export default function ProgramsPage() {
         }}>
         <AlertDialogContent className="border-[#047857]/25">
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete program?</AlertDialogTitle>
+            <AlertDialogTitle>Delete {COURSE_MODULE_LABELS.moduleSingular}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. The selected program and linked references may no longer appear in lists.
+              This action cannot be undone. The selected {COURSE_MODULE_LABELS.moduleSingular} and linked references may no longer appear in lists.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

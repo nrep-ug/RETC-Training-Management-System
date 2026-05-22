@@ -13,6 +13,7 @@ import { Plus } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { PartnerDialog } from '@/components/partner-dialog';
 import { PartnerTable } from '@/components/partner-table';
+import { PARTNER_LABELS } from '@/lib/partner-labels';
 function documentStableId(doc) {
     if (!doc)
         return '';
@@ -135,7 +136,7 @@ export default function PartnersPage() {
         catch (error) {
             toast({
                 title: 'Unable to load partners',
-                description: error instanceof Error ? error.message : 'Could not fetch training partners.',
+                description: error instanceof Error ? error.message : 'Could not fetch partners.',
                 variant: 'destructive',
             });
             setPartners([]);
@@ -162,7 +163,7 @@ export default function PartnersPage() {
             setSelectedPartner(null);
             toast({
                 title: selectedPartner ? 'Partner updated' : 'Partner added',
-                description: selectedPartner ? 'Training partner changes were saved.' : 'Training partner created successfully.',
+                description: selectedPartner ? 'Partner changes were saved.' : 'Partner created successfully.',
             });
         }
         catch (error) {
@@ -182,7 +183,7 @@ export default function PartnersPage() {
             setPartners((prev) => prev.filter((p) => p.$id !== pendingDeleteId));
             toast({
                 title: 'Partner deleted',
-                description: 'The training partner was removed successfully.',
+                description: 'The partner was removed successfully.',
             });
         }
         catch (error) {
@@ -210,15 +211,15 @@ export default function PartnersPage() {
     return (<div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex flex-col gap-4 sm:mb-8 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl lg:text-4xl">Training Partners</h1>
-          <p className="mt-2 text-gray-600">Manage partner organizations conducting trainings.</p>
+          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl lg:text-4xl">{PARTNER_LABELS.moduleTitle}</h1>
+          <p className="mt-2 text-gray-600">{PARTNER_LABELS.manageDescription}.</p>
         </div>
         {isAdmin && (<Button className="w-full shrink-0 sm:w-auto" onClick={() => {
                 setSelectedPartner(null);
                 setShowDialog(true);
             }}>
             <Plus className="mr-2 h-4 w-4"/>
-            Add Partner
+            {PARTNER_LABELS.addButton}
           </Button>)}
       </div>
       <Card className="mb-6 p-4">
@@ -253,9 +254,9 @@ export default function PartnersPage() {
         }}>
         <AlertDialogContent className="border-[#047857]/25">
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete training partner?</AlertDialogTitle>
+            <AlertDialogTitle>Delete partner?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. Programs referencing this partner may lose partner context.
+              This action cannot be undone. Courses referencing this partner may lose partner context.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

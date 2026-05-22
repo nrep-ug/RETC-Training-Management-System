@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/components/auth-provider';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
-import { TraineeStatus } from '@/lib/types';
+import { TraineeStatus, TRAINEE_STATUS_HINT } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Plus, Upload } from 'lucide-react';
@@ -14,6 +14,10 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
+import { getCourseFilterSelectOptions, getCourseKeyFromProgram, getTraineeCourseLabel, traineeMatchesCourseFilter, } from '@/lib/renewable-energy-courses';
+import { assertValidTraineeLevel, enrichTraineeWithLevel, getTraineeLevelFilterSelectOptions, getTraineeLevelFromDoc, getTraineeLevelLabel, traineeMatchesLevelFilter, } from '@/lib/trainee-levels';
+import { buildTrainerNameById, getTrainerIdFromProgram, resolveTrainerDisplayName, } from '@/lib/program-trainer';
 function getEnrollmentTraineeId(doc) {
     const value = doc.trainee_id || doc.traineeId || doc.trainee || '';
     if (typeof value === 'string')
@@ -96,6 +100,11 @@ function sanitizeTraineePayload(data) {
                 }
                 throw new Error('Certification status must be certified, pending, or not-certified.');
             }
+            if (key === 'trainee_level') {
+                const level = assertValidTraineeLevel(trimmed);
+                cleaned[key] = level;
+                return;
+            }
             cleaned[key] = trimmed;
             return;
         }
@@ -121,46 +130,113 @@ function buildTraineePayloadCandidates(payload, programId) {
         ...payload,
         program_id: programId,
     };
+    const levelKey = payload.trainee_level ? assertValidTraineeLevel(payload.trainee_level) : '';
     const strictStringConsent = {
         ...base,
         consent_given: String(base.consent_given || 'no'),
     };
+    if (levelKey) {
+        strictStringConsent.trainee_level = levelKey;
+    }
     const withoutConsentDate = { ...strictStringConsent };
     delete withoutConsentDate.consent_date;
     const consentTrueFalse = {
         ...withoutConsentDate,
         consent_given: withoutConsentDate.consent_given === 'yes' ? 'true' : 'false',
     };
-    return [strictStringConsent, withoutConsentDate, consentTrueFalse];
+    const candidates = [strictStringConsent, withoutConsentDate, consentTrueFalse];
+    if (levelKey) {
+        const withCamelLevel = { ...strictStringConsent, traineeLevel: levelKey };
+        delete withCamelLevel.trainee_level;
+        const withShortLevel = { ...strictStringConsent, level: levelKey };
+        delete withShortLevel.trainee_level;
+        const withShortLevelNoDate = { ...withoutConsentDate, level: levelKey };
+        delete withShortLevelNoDate.trainee_level;
+        candidates.unshift(withShortLevel, withCamelLevel, withShortLevelNoDate);
+    }
+    else {
+        const withoutLevel = { ...strictStringConsent };
+        delete withoutLevel.trainee_level;
+        const withoutLevelNoDate = { ...withoutConsentDate };
+        delete withoutLevelNoDate.trainee_level;
+        candidates.push(withoutLevel, withoutLevelNoDate);
+    }
+    return candidates;
+}
+function isUnknownTraineeLevelAttributeError(message) {
+    const msg = String(message || '');
+    return /Unknown attribute:\s*["'](trainee_level|traineeLevel|level)["']/i.test(msg);
+}
+function responseHasTraineeLevel(doc) {
+    return Boolean(getTraineeLevelFromDoc(doc));
+}
+function throwTraineeLevelAttributeSetupError() {
+    throw new Error('Participant level was not saved. In Appwrite → trainees collection → Attributes, add Enum `trainee_level` (or `level`) with values `beginner`, `technician`, and `trainer`, click Update, then save again.');
 }
 async function createTraineeWithFallback(payload, programId) {
+    const levelKey = payload.trainee_level ? assertValidTraineeLevel(payload.trainee_level) : '';
     const candidates = buildTraineePayloadCandidates(payload, programId);
     const attemptErrors = [];
+    let sawUnknownLevel = false;
     for (let i = 0; i < candidates.length; i++) {
+        const candidate = candidates[i];
         try {
-            return await databases.createDocument(DB_ID, COLLECTIONS.TRAINEES, 'unique()', {
-                ...candidates[i],
-                status: candidates[i].status || TraineeStatus.ENROLLED,
+            const doc = await databases.createDocument(DB_ID, COLLECTIONS.TRAINEES, 'unique()', {
+                ...candidate,
+                status: candidate.status || TraineeStatus.ENROLLED,
             });
+            if (levelKey && !responseHasTraineeLevel(doc)) {
+                throwTraineeLevelAttributeSetupError();
+            }
+            return doc;
         }
         catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
+            if (isUnknownTraineeLevelAttributeError(msg)) {
+                sawUnknownLevel = true;
+                attemptErrors.push(`Attempt ${i + 1}: ${msg}`);
+                continue;
+            }
+            if (msg.includes('Participant level was not saved')) {
+                throw error;
+            }
             attemptErrors.push(`Attempt ${i + 1}: ${msg}`);
         }
+    }
+    if (levelKey && sawUnknownLevel) {
+        throwTraineeLevelAttributeSetupError();
     }
     throw new Error(`Failed to create trainee. ${attemptErrors.join(' | ')}`);
 }
 async function updateTraineeWithFallback(traineeId, payload, programId) {
+    const levelKey = payload.trainee_level ? assertValidTraineeLevel(payload.trainee_level) : '';
     const candidates = buildTraineePayloadCandidates(payload, programId);
     const attemptErrors = [];
+    let sawUnknownLevel = false;
     for (let i = 0; i < candidates.length; i++) {
+        const candidate = candidates[i];
         try {
-            return await databases.updateDocument(DB_ID, COLLECTIONS.TRAINEES, traineeId, candidates[i]);
+            const doc = await databases.updateDocument(DB_ID, COLLECTIONS.TRAINEES, traineeId, candidate);
+            if (levelKey && !responseHasTraineeLevel(doc)) {
+                throwTraineeLevelAttributeSetupError();
+            }
+            return doc;
         }
         catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
+            if (isUnknownTraineeLevelAttributeError(msg)) {
+                sawUnknownLevel = true;
+                attemptErrors.push(`Attempt ${i + 1}: ${msg}`);
+                continue;
+            }
+            if (msg.includes('Participant level was not saved')) {
+                throw error;
+            }
             attemptErrors.push(`Attempt ${i + 1}: ${msg}`);
         }
+    }
+    if (levelKey && sawUnknownLevel) {
+        throwTraineeLevelAttributeSetupError();
     }
     throw new Error(`Failed to update trainee. ${attemptErrors.join(' | ')}`);
 }
@@ -168,6 +244,7 @@ export default function TraineesPage() {
     const { isAdmin, isManager } = useAuth();
     const [trainees, setTrainees] = useState([]);
     const [programs, setPrograms] = useState([]);
+    const [trainers, setTrainers] = useState([]);
     const [isProgramsLoading, setIsProgramsLoading] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [showDialog, setShowDialog] = useState(false);
@@ -177,6 +254,8 @@ export default function TraineesPage() {
         query: '',
         status: 'all',
         gender: 'all',
+        course: 'all',
+        traineeLevel: 'all',
         programId: 'all',
         district: '',
     });
@@ -187,7 +266,7 @@ export default function TraineesPage() {
         setIsProgramsLoading(true);
         if (!databases || !DB_ID || !COLLECTIONS.PROGRAMS) {
             toast({
-                title: 'Programs not configured',
+                title: 'Courses not configured',
                 description: 'Set NEXT_PUBLIC_APPWRITE_PROGRAMS_COLLECTION_ID in your environment.',
                 variant: 'destructive',
             });
@@ -201,14 +280,26 @@ export default function TraineesPage() {
         catch (error) {
             console.error('Error fetching programs for trainee form:', error);
             toast({
-                title: 'Unable to load programs',
-                description: error instanceof Error ? error.message : 'Could not load programs for enrollment.',
+                title: `Unable to load ${COURSE_MODULE_LABELS.modulePlural}`,
+                description: error instanceof Error ? error.message : `Could not load ${COURSE_MODULE_LABELS.modulePlural} for enrollment.`,
                 variant: 'destructive',
             });
             return [];
         }
         finally {
             setIsProgramsLoading(false);
+        }
+    };
+    const fetchTrainers = async () => {
+        if (!databases || !DB_ID || !COLLECTIONS.TRAINERS)
+            return [];
+        try {
+            const response = await databases.listDocuments(DB_ID, COLLECTIONS.TRAINERS);
+            return response.documents;
+        }
+        catch (error) {
+            console.error('Error fetching trainers for trainees:', error);
+            return [];
         }
     };
     const fetchEnrollments = async () => {
@@ -224,8 +315,14 @@ export default function TraineesPage() {
                 throw new Error('Trainees collection is not configured. Check your Appwrite environment variables.');
             }
             const traineeResponse = await databases.listDocuments(DB_ID, COLLECTIONS.TRAINEES);
-            const [programDocs, enrollmentDocs] = await Promise.all([fetchPrograms(), fetchEnrollments()]);
+            const [programDocs, enrollmentDocs, trainerDocs] = await Promise.all([
+                fetchPrograms(),
+                fetchEnrollments(),
+                fetchTrainers(),
+            ]);
             setPrograms(programDocs);
+            setTrainers(trainerDocs);
+            const trainerById = buildTrainerNameById(trainerDocs);
             const enrollmentByTrainee = Object.fromEntries(enrollmentDocs
                 .map((e) => {
                 const traineeId = getEnrollmentTraineeId(e);
@@ -236,17 +333,27 @@ export default function TraineesPage() {
                     }];
             })
                 .filter(([traineeId]) => !!traineeId));
-            const mappedTrainees = traineeResponse.documents.map((t) => ({
-                ...t,
-                program_id: enrollmentByTrainee[t.$id]?.program_id
+            const programByIdSnapshot = Object.fromEntries(programDocs.map((p) => [p.$id, p]));
+            const mappedTrainees = traineeResponse.documents.map((t) => {
+                const programId = enrollmentByTrainee[t.$id]?.program_id
                     || t.program_id
                     || t.programId
                     || (t.program && typeof t.program === 'object' ? (t.program.$id || t.program.documentId || t.program.id || '') : t.program)
-                    || '',
-                program_name: enrollmentByTrainee[t.$id]?.program_name
-                    || (t.program && typeof t.program === 'object' ? getProgramLabel(t.program) : '')
-                    || '',
-            }));
+                    || '';
+                const prog = programByIdSnapshot[programId];
+                const trainerId = prog ? getTrainerIdFromProgram(prog) : '';
+                return {
+                    ...t,
+                    trainee_level: getTraineeLevelFromDoc(t),
+                    trainee_level_label: getTraineeLevelLabel(getTraineeLevelFromDoc(t)),
+                    program_id: programId,
+                    program_name: enrollmentByTrainee[t.$id]?.program_name
+                        || (t.program && typeof t.program === 'object' ? getProgramLabel(t.program) : '')
+                        || '',
+                    trainer_id: trainerId,
+                    trainer_name: prog ? resolveTrainerDisplayName(prog, trainerById) : '',
+                };
+            });
             setTrainees(mappedTrainees);
         }
         catch (error) {
@@ -272,7 +379,10 @@ export default function TraineesPage() {
     useEffect(() => {
         if (!showDialog)
             return;
-        fetchPrograms().then((docs) => setPrograms(docs));
+        Promise.all([fetchPrograms(), fetchTrainers()]).then(([programDocs, trainerDocs]) => {
+            setPrograms(programDocs);
+            setTrainers(trainerDocs);
+        });
     }, [showDialog]);
     const handleDeleteTrainee = async (id) => {
         setPendingDeleteId(id);
@@ -300,6 +410,8 @@ export default function TraineesPage() {
             setPendingDeleteId('');
         }
     };
+    const trainerById = useMemo(() => buildTrainerNameById(trainers), [trainers]);
+    const programById = useMemo(() => Object.fromEntries(programs.map((p) => [p.$id, { ...p, course: getCourseKeyFromProgram(p) }])), [programs]);
     const handleSaveTrainee = async (data) => {
         try {
             if (!databases || !DB_ID || !COLLECTIONS.TRAINEES) {
@@ -312,7 +424,7 @@ export default function TraineesPage() {
             }
             const { program_id, ...traineePayload } = payload;
             if (!program_id) {
-                throw new Error('Please select a program for this trainee.');
+                throw new Error(`Please select a ${COURSE_MODULE_LABELS.moduleSingular} for this trainee.`);
             }
             const normalizedEmail = String(traineePayload.email || '').trim().toLowerCase();
             const normalizedPhone = String(traineePayload.phone || '').trim();
@@ -336,12 +448,29 @@ export default function TraineesPage() {
                 // Update existing
                 const updateId = String(selectedTrainee.$id || selectedTrainee.documentId || selectedId).trim();
                 const updated = await updateTraineeWithFallback(updateId, traineePayload, program_id);
-                setTrainees(trainees.map((t) => (documentStableId(t) === selectedId ? { ...t, ...updated, program_id } : t)));
+                const prog = programById[program_id];
+                const tid = prog ? getTrainerIdFromProgram(prog) : '';
+                setTrainees(trainees.map((t) => (documentStableId(t) === selectedId
+                    ? enrichTraineeWithLevel({
+                        ...t,
+                        ...updated,
+                        program_id,
+                        trainer_id: tid,
+                        trainer_name: prog ? resolveTrainerDisplayName(prog, trainerById) : '',
+                    }, traineePayload.trainee_level)
+                    : t)));
             }
             else {
                 // Create new
                 const response = await createTraineeWithFallback(traineePayload, program_id);
-                setTrainees([...trainees, { ...response, program_id }]);
+                const prog = programById[program_id];
+                const tid = prog ? getTrainerIdFromProgram(prog) : '';
+                setTrainees([...trainees, enrichTraineeWithLevel({
+                    ...response,
+                    program_id,
+                    trainer_id: tid,
+                    trainer_name: prog ? resolveTrainerDisplayName(prog, trainerById) : '',
+                }, traineePayload.trainee_level)]);
             }
             setShowDialog(false);
             setSelectedTrainee(null);
@@ -356,7 +485,7 @@ export default function TraineesPage() {
             console.error('Error saving trainee:', error);
             let message = error instanceof Error ? error.message : 'Failed to save trainee.';
             if (typeof message === 'string' && message.includes('Unknown attribute: "program_id"')) {
-                message = 'Add a "program_id" attribute in the trainees collection (String or Relationship to programs), then try again.';
+                message = 'Add a "program_id" attribute in the trainees collection (String or Relationship to courses), then try again.';
             }
             toast({
                 title: 'Save failed',
@@ -366,6 +495,7 @@ export default function TraineesPage() {
             throw error;
         }
     };
+    const courseMap = useMemo(() => Object.fromEntries(programs.map((p) => [p.$id, getTraineeCourseLabel({ program_id: p.$id }, programById)])), [programs, programById]);
     const filteredTrainees = useMemo(() => {
         const statusBucket = (s) => {
             const v = String(s || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -383,16 +513,18 @@ export default function TraineesPage() {
             const matchesGender = filters.gender === 'all' || String(t.gender || '').toLowerCase() === filters.gender;
             const traineeProgramId = String(t.program_id || '').trim();
             const matchesProgram = filters.programId === 'all' || traineeProgramId === filters.programId;
+            const matchesCourse = traineeMatchesCourseFilter(t, filters.course, programById);
+            const matchesLevel = traineeMatchesLevelFilter(t, filters.traineeLevel);
             const districtNeedle = filters.district.trim().toLowerCase();
             const matchesDistrict = !districtNeedle || String(t.district || '').toLowerCase().includes(districtNeedle);
-            return matchesQuery && matchesStatus && matchesGender && matchesProgram && matchesDistrict;
+            return matchesQuery && matchesStatus && matchesGender && matchesCourse && matchesLevel && matchesProgram && matchesDistrict;
         });
-    }, [trainees, filters]);
+    }, [trainees, filters, programById]);
     return (<div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex flex-col gap-4 sm:mb-8 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl lg:text-4xl">Trainees</h1>
-          <p className="mt-2 text-gray-600">Manage training program participants</p>
+          <p className="mt-2 text-gray-600">Manage training course participants</p>
         </div>
         <div className="flex flex-wrap gap-2 sm:gap-3">
           {isAdmin && (<>
@@ -409,29 +541,29 @@ export default function TraineesPage() {
             </>)}
         </div>
       </div>
-      <Card className="mb-6 p-4">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-6">
-          <div className="space-y-2 md:col-span-2">
+      <Card className="mb-6 p-4 sm:p-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+          <div className="min-w-0 space-y-2 sm:col-span-2 2xl:col-span-2">
             <Label>Search</Label>
             <Input placeholder="Search by name, email or phone" value={filters.query} onChange={(e) => setFilters((prev) => ({ ...prev, query: e.target.value }))}/>
           </div>
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <Label>Status</Label>
             <Select value={filters.status} onValueChange={(value) => setFilters((prev) => ({ ...prev, status: value }))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="enrolled">Enrolled</SelectItem>
+                <SelectItem value="enrolled">Currently Enrolled</SelectItem>
                 <SelectItem value="in_progress">In Progress</SelectItem>
                 <SelectItem value="completed">Completed</SelectItem>
                 <SelectItem value="dropped">Dropped</SelectItem>
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <Label>Gender</Label>
             <Select value={filters.gender} onValueChange={(value) => setFilters((prev) => ({ ...prev, gender: value }))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All genders</SelectItem>
                 <SelectItem value="male">Male</SelectItem>
@@ -439,26 +571,48 @@ export default function TraineesPage() {
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
-            <Label>Program</Label>
-            <Select value={filters.programId} onValueChange={(value) => setFilters((prev) => ({ ...prev, programId: value }))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+          <div className="min-w-0 space-y-2 sm:col-span-2 2xl:col-span-2">
+            <Label>{COURSE_MODULE_LABELS.categoryFilterLabel}</Label>
+            <Select value={filters.course} onValueChange={(value) => setFilters((prev) => ({ ...prev, course: value }))}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All programs</SelectItem>
+                {getCourseFilterSelectOptions().map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="min-w-0 space-y-2">
+            <Label>Level</Label>
+            <Select value={filters.traineeLevel} onValueChange={(value) => setFilters((prev) => ({ ...prev, traineeLevel: value }))}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {getTraineeLevelFilterSelectOptions().map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="min-w-0 space-y-2 sm:col-span-2 lg:col-span-2 2xl:col-span-2">
+            <Label>{COURSE_MODULE_LABELS.enrollmentLabel}</Label>
+            <Select value={filters.programId} onValueChange={(value) => setFilters((prev) => ({ ...prev, programId: value }))}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{COURSE_MODULE_LABELS.filterAll}</SelectItem>
                 {programs.map((p) => (<SelectItem key={p.$id} value={p.$id}>{p.title || p.name || 'Untitled'}</SelectItem>))}
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <Label>District</Label>
-            <Input placeholder="Filter district" value={filters.district} onChange={(e) => setFilters((prev) => ({ ...prev, district: e.target.value }))}/>
+            <Input className="w-full" placeholder="Filter district" value={filters.district} onChange={(e) => setFilters((prev) => ({ ...prev, district: e.target.value }))}/>
           </div>
         </div>
       </Card>
 
       {/* Trainees Table */}
       <Card>
-        <TraineeTable trainees={filteredTrainees} isLoading={isLoading} onEdit={isAdmin ? handleEditTrainee : undefined} onDelete={isAdmin ? handleDeleteTrainee : undefined} isAdmin={isAdmin} programMap={Object.fromEntries(programs.map((p) => [p.$id, p.title || p.name || p.program_name || '']))} paginationResetKey={JSON.stringify(filters)}/>
+        <TraineeTable trainees={filteredTrainees} isLoading={isLoading} onEdit={isAdmin ? handleEditTrainee : undefined} onDelete={isAdmin ? handleDeleteTrainee : undefined} isAdmin={isAdmin} programMap={Object.fromEntries(programs.map((p) => [p.$id, p.title || p.name || p.program_name || '']))} courseMap={courseMap} paginationResetKey={JSON.stringify(filters)}/>
       </Card>
 
       {/* Add/Edit Dialog */}

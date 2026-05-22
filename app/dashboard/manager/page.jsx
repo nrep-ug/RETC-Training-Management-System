@@ -22,14 +22,14 @@ export default function ManagerDashboard() {
             icon: Users,
         },
         {
-            label: 'View Trainers',
-            description: 'Review trainer experience and roles',
+            label: 'View RETC Facilitators',
+            description: 'Review RETC facilitator experience and roles',
             href: '/dashboard/trainers',
             icon: UserRoundCog,
         },
         {
-            label: 'View Programs',
-            description: 'See training program schedules',
+            label: 'View Courses',
+            description: 'See training course schedules',
             href: '/dashboard/programs',
             icon: BookOpen,
         },
@@ -90,7 +90,7 @@ export default function ManagerDashboard() {
         <Card className="p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-600 text-sm font-medium">Total Programs</p>
+              <p className="text-gray-600 text-sm font-medium">Total Courses</p>
               <p className="text-3xl font-bold text-gray-900 mt-2">
                 {isLoading ? '-' : stats.totalPrograms}
               </p>
@@ -102,7 +102,7 @@ export default function ManagerDashboard() {
         <Card className="p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-600 text-sm font-medium">Active Programs</p>
+              <p className="text-gray-600 text-sm font-medium">Active Courses</p>
               <p className="text-3xl font-bold text-gray-900 mt-2">
                 {isLoading ? '-' : stats.activePrograms}
               </p>

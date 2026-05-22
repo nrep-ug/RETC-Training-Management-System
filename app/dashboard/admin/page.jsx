@@ -22,14 +22,14 @@ export default function AdminDashboard() {
             icon: Users,
         },
         {
-            label: 'Manage Trainers',
-            description: 'Maintain trainer profiles and roles',
+            label: 'Manage RETC Facilitators',
+            description: 'Maintain RETC facilitator profiles and roles',
             href: '/dashboard/trainers',
             icon: UserRoundCog,
         },
         {
-            label: 'Manage Programs',
-            description: 'Create and update training programs',
+            label: 'Manage Courses',
+            description: 'Create and update training courses',
             href: '/dashboard/programs',
             icon: BookOpen,
         },
@@ -90,7 +90,7 @@ export default function AdminDashboard() {
         <Card className="p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-600 text-sm font-medium">Total Programs</p>
+              <p className="text-gray-600 text-sm font-medium">Total Courses</p>
               <p className="text-3xl font-bold text-gray-900 mt-2">
                 {isLoading ? '-' : stats.totalPrograms}
               </p>
@@ -102,7 +102,7 @@ export default function AdminDashboard() {
         <Card className="p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-600 text-sm font-medium">Active Programs</p>
+              <p className="text-gray-600 text-sm font-medium">Active Courses</p>
               <p className="text-3xl font-bold text-gray-900 mt-2">
                 {isLoading ? '-' : stats.activePrograms}
               </p>

@@ -309,7 +309,7 @@ export default function ImportTraineesPage() {
               <li>Next of kin phone must be no longer than 12 characters</li>
               <li>Gender values must be Male or Female</li>
               <li>Duplicate emails will be skipped</li>
-              <li>All trainees will be created with &apos;Enrolled&apos; status</li>
+              <li>All trainees will be created with &apos;Currently Enrolled&apos; status</li>
             </ul>
           </div>
         </div>

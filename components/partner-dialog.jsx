@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { PARTNER_LABELS } from '@/lib/partner-labels';
 export function PartnerDialog({ open, onOpenChange, partner, onSave }) {
     const [isLoading, setIsLoading] = useState(false);
     const [submitError, setSubmitError] = useState('');
@@ -94,9 +95,9 @@ export function PartnerDialog({ open, onOpenChange, partner, onSave }) {
     return (<Dialog open={open} onOpenChange={onOpenChange} modal={false}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{partner ? 'Edit Partner' : 'Add Training Partner'}</DialogTitle>
+          <DialogTitle>{partner ? PARTNER_LABELS.editTitle : PARTNER_LABELS.addTitle}</DialogTitle>
           <DialogDescription>
-            {partner ? 'Update training partner details.' : 'Create a new training partner profile.'}
+            {partner ? 'Update partner details.' : 'Create a new partner profile.'}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={(e) => {

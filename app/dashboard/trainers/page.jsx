@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/hooks/use-toast';
+import { getRetcFacilitatorRoleLabel, RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
 function documentStableId(doc) {
     if (!doc)
         return '';
@@ -36,7 +37,7 @@ function sanitizeTrainerPayload(data) {
             }
             if (key === 'email') {
                 if (trimmed && !trimmed.includes('@')) {
-                    throw new Error('Please enter a valid trainer email.');
+                    throw new Error('Please enter a valid RETC facilitator email.');
                 }
                 cleaned[key] = trimmed.toLowerCase();
                 return;
@@ -102,7 +103,7 @@ async function createTrainerWithFallback(payload) {
             errors.push(`Attempt ${i + 1}: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
-    throw new Error(`Failed to create trainer. ${errors.join(' | ')}`);
+    throw new Error(`Failed to create RETC facilitator. ${errors.join(' | ')}`);
 }
 async function updateTrainerWithFallback(trainerId, payload) {
     const candidates = buildTrainerPayloadCandidates(payload);
@@ -115,7 +116,7 @@ async function updateTrainerWithFallback(trainerId, payload) {
             errors.push(`Attempt ${i + 1}: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
-    throw new Error(`Failed to update trainer. ${errors.join(' | ')}`);
+    throw new Error(`Failed to update RETC facilitator. ${errors.join(' | ')}`);
 }
 export default function TrainersPage() {
     const { isAdmin } = useAuth();
@@ -184,15 +185,15 @@ export default function TrainersPage() {
             await databases.deleteDocument(DB_ID, COLLECTIONS.TRAINERS, pendingDeleteId);
             setTrainers(trainers.filter(t => t.$id !== pendingDeleteId));
             toast({
-                title: 'Trainer deleted',
-                description: 'The trainer profile was removed successfully.',
+                title: 'RETC facilitator deleted',
+                description: 'The RETC facilitator profile was removed successfully.',
             });
         }
         catch (error) {
             console.error('Error deleting trainer:', error);
             toast({
                 title: 'Delete failed',
-                description: error instanceof Error ? error.message : 'Could not delete trainer.',
+                description: error instanceof Error ? error.message : 'Could not delete RETC facilitator.',
                 variant: 'destructive',
             });
         }
@@ -215,7 +216,7 @@ export default function TrainersPage() {
             });
             if (duplicate) {
                 const reason = String(duplicate.email || '').trim().toLowerCase() === normalizedEmail ? 'email' : 'phone';
-                throw new Error(`A trainer with this ${reason} already exists.`);
+                throw new Error(`An RETC facilitator with this ${reason} already exists.`);
             }
             if (selectedTrainer) {
                 const updateId = String(selectedTrainer.$id || selectedTrainer.documentId || selectedId).trim();
@@ -229,15 +230,15 @@ export default function TrainersPage() {
             setShowDialog(false);
             setSelectedTrainer(null);
             toast({
-                title: selectedTrainer ? 'Trainer updated' : 'Trainer added',
-                description: selectedTrainer ? 'Trainer changes were saved.' : 'New trainer created successfully.',
+                title: selectedTrainer ? 'RETC facilitator updated' : 'RETC facilitator added',
+                description: selectedTrainer ? 'RETC facilitator changes were saved.' : 'New RETC facilitator created successfully.',
             });
         }
         catch (error) {
             console.error('Error saving trainer:', error);
             toast({
                 title: 'Save failed',
-                description: error instanceof Error ? error.message : 'Failed to save trainer.',
+                description: error instanceof Error ? error.message : 'Failed to save RETC facilitator.',
                 variant: 'destructive',
             });
             throw error;
@@ -259,12 +260,12 @@ export default function TrainersPage() {
     return (<div className="p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex flex-col gap-4 sm:mb-8 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl lg:text-4xl">Trainers</h1>
-          <p className="mt-2 text-gray-600">Manage trainers and their professional profiles</p>
+          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl lg:text-4xl">{RETC_FACILITATOR_LABELS.moduleTitle}</h1>
+          <p className="mt-2 text-gray-600">{RETC_FACILITATOR_LABELS.manageDescription}</p>
         </div>
         {isAdmin && (<Button className="w-full shrink-0 sm:w-auto" onClick={handleAddTrainer}>
             <Plus className="mr-2 h-4 w-4"/>
-            Add Trainer
+            {RETC_FACILITATOR_LABELS.addButton}
           </Button>)}
       </div>
       <Card className="mb-6 p-4">
@@ -279,8 +280,8 @@ export default function TrainersPage() {
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All roles</SelectItem>
-                <SelectItem value="trainer">Trainer</SelectItem>
-                <SelectItem value="senior_trainer">Senior Trainer</SelectItem>
+                <SelectItem value="trainer">{getRetcFacilitatorRoleLabel('trainer')}</SelectItem>
+                <SelectItem value="senior_trainer">{getRetcFacilitatorRoleLabel('senior_trainer')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -309,9 +310,9 @@ export default function TrainersPage() {
         }}>
         <AlertDialogContent className="border-[#047857]/25">
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete trainer?</AlertDialogTitle>
+            <AlertDialogTitle>Delete RETC facilitator?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. The trainer profile will be permanently removed.
+              This action cannot be undone. The RETC facilitator profile will be permanently removed.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -1,6 +1,10 @@
 'use client';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { ProgramStatus } from '@/lib/types';
+import { getCourseFormSelectOptions, getCourseKeyFromProgram } from '@/lib/renewable-energy-courses';
+import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
+import { RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
+import { partnerDocumentId } from '@/lib/program-partner-sync';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,6 +21,7 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
     const totalSteps = 3;
     const [formData, setFormData] = useState({
         title: '',
+        course: '',
         training_partner: '',
         training_partner_id: '',
         partner_ids: [],
@@ -62,6 +67,7 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
                 || '';
             setFormData({
                 title: program.title,
+                course: getCourseKeyFromProgram(program),
                 training_partner: program.training_partner || program.trainingPartner || program['training-partners'] || program.training_partners || '',
                 training_partner_id: program.training_partner_id
                     || program.trainingPartnerId
@@ -91,6 +97,7 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
         else {
             setFormData({
                 title: '',
+                course: '',
                 training_partner: '',
                 training_partner_id: '',
                 partner_ids: [],
@@ -104,12 +111,44 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
             });
         }
     }, [program, open]);
+    useEffect(() => {
+        if (!open || !program)
+            return;
+        const raw = Array.isArray(program.partner_ids) ? program.partner_ids : [];
+        const mainId = String(program.training_partner_id
+            || program.trainingPartnerId
+            || (program['training-partners'] && typeof program['training-partners'] === 'object'
+                ? (program['training-partners'].$id || program['training-partners'].documentId || program['training-partners'].id || '')
+                : '')
+            || '').trim();
+        const nextPartnerIds = raw.map((id) => String(id || '').trim()).filter((id) => id && id !== mainId);
+        setFormData((prev) => {
+            const prevSorted = [...prev.partner_ids].map(String).sort().join(',');
+            const nextSorted = [...nextPartnerIds].sort().join(',');
+            const mainChanged = String(prev.training_partner_id || '') !== mainId;
+            if (!mainChanged && prevSorted === nextSorted)
+                return prev;
+            return {
+                ...prev,
+                training_partner_id: mainId || prev.training_partner_id,
+                partner_ids: nextPartnerIds,
+            };
+        });
+    }, [
+        open,
+        program?.$id,
+        program?.training_partner_id,
+        Array.isArray(program?.partner_ids) ? program.partner_ids.join(',') : '',
+    ]);
     const validateStep = (step) => {
         if (step === 1 && !String(formData.title || '').trim()) {
-            return 'Program title is required.';
+            return COURSE_MODULE_LABELS.titleRequired;
+        }
+        if (step === 1 && !String(formData.course || '').trim()) {
+            return COURSE_MODULE_LABELS.categoryRequired;
         }
         if (step === 1 && !String(formData.training_partner_id || '').trim()) {
-            return 'Training partner is required.';
+            return 'Partner is required.';
         }
         if (step === 2) {
             if (!String(formData.start_date || '').trim()) {
@@ -134,8 +173,14 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
         const mainId = String(formData.training_partner_id || '').trim();
         if (!mainId)
             return partners;
-        return partners.filter((p) => p.$id !== mainId);
+        return partners.filter((p) => partnerDocumentId(p) !== mainId);
     }, [partners, formData.training_partner_id]);
+    const isOtherPartnerChecked = (partner) => {
+        const id = partnerDocumentId(partner);
+        if (!id)
+            return false;
+        return formData.partner_ids.some((pid) => String(pid) === id);
+    };
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
@@ -157,7 +202,7 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
         }
         catch (error) {
             console.error('Error saving program:', error);
-            setSubmitError(error instanceof Error ? error.message : 'Failed to save program.');
+            setSubmitError(error instanceof Error ? error.message : `Failed to save ${COURSE_MODULE_LABELS.moduleSingular}.`);
         }
         finally {
             setIsLoading(false);
@@ -190,13 +235,13 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
         setCurrentStep((prev) => Math.max(prev - 1, 1));
     };
     return (<Dialog open={open} onOpenChange={onOpenChange} modal={false}>
-      <DialogContent className="w-[calc(100vw-2rem)] max-w-md overflow-hidden">
-        <DialogHeader>
-          <DialogTitle>{program ? 'Edit Program' : 'Add New Program'}</DialogTitle>
+      <DialogContent className="flex max-h-[min(90dvh,720px)] w-[calc(100vw-2rem)] max-w-md flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="shrink-0 border-b px-6 py-4 pr-12">
+          <DialogTitle>{program ? COURSE_MODULE_LABELS.editTitle : COURSE_MODULE_LABELS.addTitle}</DialogTitle>
           <DialogDescription>
             {program
-            ? 'Update program information'
-            : 'Create a new training program'}
+            ? COURSE_MODULE_LABELS.updateDescription
+            : COURSE_MODULE_LABELS.createDescription}
           </DialogDescription>
         </DialogHeader>
 
@@ -205,7 +250,8 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
             if (currentStep < totalSteps)
                 return;
             void handleSubmit(e);
-        }} className="space-y-4">
+        }} className="flex min-h-0 flex-1 flex-col">
+          <div className="shrink-0 space-y-3 px-6 pt-4">
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs font-medium text-slate-500">
               <span>Step {currentStep} of {totalSteps}</span>
@@ -215,7 +261,7 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
               <div className="h-full rounded-full bg-gradient-to-r from-[#047857] to-[#ff8829] transition-all duration-300" style={{ width: `${(currentStep / totalSteps) * 100}%` }}/>
             </div>
             <div className="grid grid-cols-3 gap-2 text-[11px]">
-              {['Program Info', 'Schedule', 'Assignments'].map((label, idx) => {
+              {[COURSE_MODULE_LABELS.stepInfo, 'Schedule', 'Assignments'].map((label, idx) => {
             const stepNo = idx + 1;
             const active = currentStep === stepNo;
             const completed = currentStep > stepNo;
@@ -234,14 +280,32 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
               {submitError}
             </div>
           )}
+          </div>
+
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-3">
           {currentStep === 1 && (<>
           <div className="space-y-2">
-            <Label htmlFor="title">Program Title *</Label>
-            <Input id="title" value={formData.title} onChange={(e) => handleChange('title', e.target.value)} placeholder="e.g., Advanced React Training" disabled={isLoading} maxLength={PROGRAM_TITLE_MAX}/>
+            <Label htmlFor="title">{COURSE_MODULE_LABELS.titleField} *</Label>
+            <Input id="title" value={formData.title} onChange={(e) => handleChange('title', e.target.value)} placeholder="e.g., Kampala Solar Cohort 2025" disabled={isLoading} maxLength={PROGRAM_TITLE_MAX}/>
+            <p className="text-xs text-slate-500">{COURSE_MODULE_LABELS.titleHint}</p>
             <p className="text-xs text-slate-500">{String(formData.title || '').length}/{PROGRAM_TITLE_MAX}</p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="training_partner">Training Partner</Label>
+            <Label htmlFor="course">{COURSE_MODULE_LABELS.categoryFieldLabel} *</Label>
+            <Select value={formData.course || 'none'} onValueChange={(value) => handleChange('course', value === 'none' ? '' : value)}>
+              <SelectTrigger disabled={isLoading}>
+                <SelectValue placeholder={COURSE_MODULE_LABELS.categoryPlaceholder} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none" disabled>{COURSE_MODULE_LABELS.categorySelectDisabled}</SelectItem>
+                {getCourseFormSelectOptions().map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="training_partner">Partner</Label>
             <Select value={formData.training_partner_id || 'none'} onValueChange={(value) => {
                 const id = value === 'none' ? '' : value;
                 setFormData((prev) => ({
@@ -251,7 +315,7 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
                 }));
             }}>
               <SelectTrigger disabled={isLoading || isPartnersLoading}>
-                <SelectValue placeholder={isPartnersLoading ? 'Loading partners...' : 'Select training partner'} />
+                <SelectValue placeholder={isPartnersLoading ? 'Loading partners...' : 'Select partner'} />
               </SelectTrigger>
               <SelectContent>
                 {partners.map((partner) => (<SelectItem key={partner.$id} value={partner.$id}>
@@ -263,25 +327,28 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
           <div className="space-y-3">
             <div>
               <Label>Other partners</Label>
-              <p className="mt-0.5 text-xs text-slate-500">Additional collaborating partners (the training partner above is not listed here).</p>
+              <p className="mt-0.5 text-xs text-slate-500">Additional collaborating partners (the partner above is not listed here).</p>
             </div>
             <div className="max-h-36 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3">
               {partners.length === 0 && (<p className="text-sm text-slate-500">
                   {isPartnersLoading ? 'Loading partners...' : 'No partners available'}
                 </p>)}
               {partners.length > 0 && otherPartnersList.length === 0 && (<p className="text-sm text-slate-500">
-                  No other partners to add — add more partner records, or pick a different training partner.
+                  No other partners to add — add more partner records, or pick a different partner.
                 </p>)}
-              {otherPartnersList.map((partner) => (<label key={partner.$id} className="flex items-center gap-2 text-sm text-slate-700">
-                  <Checkbox checked={formData.partner_ids.includes(partner.$id)} onCheckedChange={(checked) => togglePartner(partner.$id, checked === true)} disabled={isLoading || isPartnersLoading}/>
+              {otherPartnersList.map((partner) => {
+                const pid = partnerDocumentId(partner);
+                return (<label key={pid || partner.$id} className="flex items-center gap-2 text-sm text-slate-700">
+                  <Checkbox checked={isOtherPartnerChecked(partner)} onCheckedChange={(checked) => togglePartner(pid, checked === true)} disabled={isLoading || isPartnersLoading || !pid}/>
                   <span>{partner.name}</span>
-                </label>))}
+                </label>);
+              })}
             </div>
           </div>
 
           <div className="space-y-2">
             <Label htmlFor="description">Description</Label>
-            <Textarea id="description" value={formData.description} onChange={(e) => handleChange('description', e.target.value)} placeholder="Program description..." disabled={isLoading} maxLength={PROGRAM_DESCRIPTION_MAX} className="min-h-24 resize-y break-all [overflow-wrap:anywhere]"/>
+            <Textarea id="description" value={formData.description} onChange={(e) => handleChange('description', e.target.value)} placeholder="Course description..." disabled={isLoading} maxLength={PROGRAM_DESCRIPTION_MAX} className="min-h-24 resize-y break-all [overflow-wrap:anywhere]"/>
             <p className="text-xs text-slate-500">{String(formData.description || '').length}/{PROGRAM_DESCRIPTION_MAX}</p>
           </div>
           </>)}
@@ -326,13 +393,13 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
             </div>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="trainer_id">Lead Trainer</Label>
+            <Label htmlFor="trainer_id">{RETC_FACILITATOR_LABELS.leadOnCourse}</Label>
             <Select value={formData.trainer_id || 'none'} onValueChange={(value) => handleChange('trainer_id', value === 'none' ? '' : value)}>
               <SelectTrigger disabled={isLoading || isTrainersLoading}>
-                <SelectValue placeholder={isTrainersLoading ? 'Loading trainers...' : 'Select lead trainer'} />
+                <SelectValue placeholder={isTrainersLoading ? `Loading ${RETC_FACILITATOR_LABELS.modulePlural}...` : `Select ${RETC_FACILITATOR_LABELS.moduleSingular}`} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">No lead trainer</SelectItem>
+                <SelectItem value="none">{RETC_FACILITATOR_LABELS.leadOnCourseNone}</SelectItem>
                 {trainers.map((trainer) => (<SelectItem key={trainer.$id} value={trainer.$id}>
                     {trainer.name || trainer.email || trainer.$id}
                   </SelectItem>))}
@@ -340,8 +407,9 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
             </Select>
           </div>
           </>)}
+          </div>
 
-          <div className="flex gap-3 pt-4">
+          <div className="flex shrink-0 gap-3 border-t bg-background px-6 py-4">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isLoading} className="flex-1">
               Cancel
             </Button>
@@ -354,7 +422,7 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
                 }} disabled={isLoading} className="flex-1">
                 Next
               </Button>) : (<Button type="submit" disabled={isLoading} className="flex-1">
-                {isLoading ? 'Saving...' : 'Save Program'}
+                {isLoading ? 'Saving...' : COURSE_MODULE_LABELS.saveButton}
               </Button>)}
           </div>
         </form>

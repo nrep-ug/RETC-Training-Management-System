@@ -3,15 +3,37 @@ import { useEffect, useMemo, useState } from 'react';
 import { Query } from 'appwrite';
 import { useAuth } from '@/components/auth-provider';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
+import { ReportFilterFields } from '@/components/report-filter-fields';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Download, FileText, AlertCircle } from 'lucide-react';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Download, FileText } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { buildProgramsReportFilename, buildTraineesReportFilename } from '@/lib/pdf-report-naming';
+import {
+    buildProgramByAnyId,
+    getCourseKeyFromProgram,
+    getCourseLabel,
+    getProgramIdFromTrainee,
+    programMatchesCourseFilter,
+    traineeMatchesCourseFilter,
+} from '@/lib/renewable-energy-courses';
+import { buildEnrollmentByTrainee, mergeTraineeWithEnrollment } from '@/lib/trainee-enrollment';
 import { devWarn } from '@/lib/logger';
+import { getTraineeStatusLabel } from '@/lib/types';
+import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
+import { RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
+import {
+    buildLevelByCourseCategory,
+    levelByCategoryPdfRows,
+    levelSummaryPdfRows,
+} from '@/lib/analytics-visualization';
+import { getTraineeLevelLabel } from '@/lib/trainee-levels';
+import {
+    appendGenderReportSections,
+    drawPdfSectionHeading,
+    estimatePdfTableHeightMm,
+    reservePdfVerticalSpace,
+} from '@/lib/pdf-section-table';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 const REPORT_MARGIN_X = 22;
@@ -19,12 +41,55 @@ const REPORT_MARGIN_X = 22;
 function pdfContentWidthMm(doc) {
     return doc.internal.pageSize.getWidth() - REPORT_MARGIN_X * 2;
 }
+
+/** Relative weights → mm widths that sum exactly to contentWidth (avoids squashed columns). */
+function pdfColumnWidthsMm(contentWidth, weights) {
+    const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+    if (totalWeight <= 0)
+        return weights.map(() => contentWidth / Math.max(weights.length, 1));
+    const colWidths = weights.map((w) => Math.floor(((w / totalWeight) * contentWidth) * 10) / 10);
+    const used = colWidths.reduce((sum, w) => sum + w, 0);
+    const lastIdx = colWidths.length - 1;
+    colWidths[lastIdx] = Math.round((colWidths[lastIdx] + (contentWidth - used)) * 10) / 10;
+    return colWidths;
+}
+
+function buildProgramsReportColumnStyles(contentWidth) {
+    const widths = pdfColumnWidthsMm(contentWidth, [
+        5.2, 2.4, 2.2, 2.2, 1.8, 1.3, 0.65, 0.65, 1.05,
+    ]);
+    const styles = {};
+    widths.forEach((cellWidth, index) => {
+        styles[index] = { cellWidth, halign: 'left', valign: 'top' };
+    });
+    styles[6].halign = 'center';
+    styles[7].halign = 'center';
+    styles[8].halign = 'center';
+    return styles;
+}
+
+function buildTraineesReportColumnStyles(contentWidth) {
+    const widths = pdfColumnWidthsMm(contentWidth, [
+        2.2, 3.6, 1.6, 1, 1.3, 2.6, 2.2, 1.2, 1.2, 1.1,
+    ]);
+    const styles = {};
+    widths.forEach((cellWidth, index) => {
+        styles[index] = { cellWidth, halign: 'left', valign: 'top' };
+    });
+    styles[9].halign = 'center';
+    return styles;
+}
+
+function getOtherPartnerNamesForProgram(programId, programPartnerMap, partnerById) {
+    const ids = programPartnerMap[programId];
+    if (!Array.isArray(ids))
+        return '';
+    return ids.map((id) => partnerById[id]).filter(Boolean).join(', ');
+}
 /** Readable status text in PDFs (avoids narrow columns fighting "in_progress"). */
 function formatStatusLabelForPdf(status) {
-    const raw = String(status || '').trim().toLowerCase().replace(/_/g, ' ');
-    if (!raw)
-        return '—';
-    return raw.replace(/\b\w/g, (c) => c.toUpperCase());
+    const label = getTraineeStatusLabel(status);
+    return label === '-' ? '—' : label;
 }
 function formatCertificationLabel(value) {
     const raw = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -41,15 +106,6 @@ function normalizeGender(value) {
     if (v === 'female' || v === 'f')
         return 'Female';
     return 'Other';
-}
-function getProgramIdFromTrainee(trainee) {
-    const value = trainee.program_id || trainee.programId || trainee.program || '';
-    if (typeof value === 'string')
-        return String(value).trim();
-    if (value && typeof value === 'object') {
-        return String(value.$id || value.documentId || value.id || '').trim();
-    }
-    return '';
 }
 function getCreatedYear(doc) {
     const dateValue = doc.$createdAt || doc.created_at || '';
@@ -234,77 +290,6 @@ function findTrainerById(trainerDocs, id) {
         return undefined;
     return (trainerDocs || []).find((t) => t.$id === id || t.documentId === id);
 }
-function getEnrollmentTraineeId(doc) {
-    const value = doc.trainee_id || doc.traineeId || doc.trainee || '';
-    if (typeof value === 'string')
-        return String(value).trim();
-    if (value && typeof value === 'object')
-        return String(value.$id || value.documentId || value.id || '').trim();
-    return '';
-}
-function getEnrollmentProgramId(doc) {
-    const value = doc.program_id || doc.programId || doc.program || '';
-    if (typeof value === 'string')
-        return String(value).trim();
-    if (value && typeof value === 'object')
-        return String(value.$id || value.documentId || value.id || '').trim();
-    return '';
-}
-/** Maps trainee id (several possible field shapes) → program id from enrollment rows. */
-function buildEnrollmentByTrainee(enrollmentDocs) {
-    const map = {};
-    (enrollmentDocs || []).forEach((e) => {
-        const pid = String(getEnrollmentProgramId(e) || '').trim();
-        if (!pid)
-            return;
-        const addKey = (raw) => {
-            const k = String(raw || '').trim();
-            if (k)
-                map[k] = pid;
-        };
-        addKey(getEnrollmentTraineeId(e));
-        addKey(e.trainee_id);
-        addKey(e.traineeId);
-        const tr = e.trainee;
-        if (tr && typeof tr === 'object') {
-            addKey(tr.$id);
-            addKey(tr.documentId);
-            addKey(tr.id);
-        }
-    });
-    return map;
-}
-/** Match trainees page + analytics: program often lives on enrollments, not on the trainee document. */
-function mergeTraineeWithEnrollment(enrollmentByTrainee, trainee) {
-    const keys = [trainee.$id, trainee.documentId, trainee.id]
-        .map((k) => String(k || '').trim())
-        .filter(Boolean);
-    let fromEnroll = '';
-    for (const k of keys) {
-        if (enrollmentByTrainee[k]) {
-            fromEnroll = enrollmentByTrainee[k];
-            break;
-        }
-    }
-    const mergedProgram = fromEnroll
-        || trainee.program_id
-        || trainee.programId
-        || (trainee.program && typeof trainee.program === 'object'
-            ? (trainee.program.$id || trainee.program.documentId || trainee.program.id || '')
-            : '')
-        || (typeof trainee.program === 'string' ? trainee.program : '');
-    return { ...trainee, program_id: String(mergedProgram || '').trim() };
-}
-function buildProgramByAnyId(programDocs) {
-    const map = {};
-    (programDocs || []).forEach((p) => {
-        map[p.$id] = p;
-        const d = p.documentId;
-        if (d && d !== p.$id)
-            map[d] = p;
-    });
-    return map;
-}
 function buildProgramTitleById(programDocs) {
     const m = {};
     (programDocs || []).forEach((p) => {
@@ -403,6 +388,7 @@ function coalesceReportFilters(f) {
     return {
         year: f.year == null || f.year === '' ? 'all' : String(f.year),
         programId: !f.programId || f.programId === '' ? 'all' : String(f.programId),
+        course: !f.course || f.course === '' ? 'all' : String(f.course),
         gender,
         district: !f.district || f.district === '' || f.district === 'all' ? 'all' : String(f.district),
         trainerId: !f.trainerId || f.trainerId === '' || f.trainerId === 'all' ? 'all' : String(f.trainerId),
@@ -412,6 +398,7 @@ function coalesceReportFilters(f) {
 const REPORT_FILTERS_ALL = {
     year: 'all',
     programId: 'all',
+    course: 'all',
     gender: 'all',
     district: 'all',
     trainerId: 'all',
@@ -432,7 +419,8 @@ function filterTraineesForReport(allTrainees, rf, programByMulti, pdfProgramPart
             || (prog && (prog.$id === rf.programId || String(prog.documentId || '') === rf.programId));
         const partnerOk = programMatchesPartnerFilter(prog, rf.partnerId, partnerDocs, pdfProgramPartnerMap);
         const trainerOk = trainerMatchesFilter(prog, rf, trainerDocs);
-        return yearOk && genderOk && districtOk && programOk && partnerOk && trainerOk;
+        const courseOk = traineeMatchesCourseFilter(t, rf.course, programByMulti);
+        return yearOk && genderOk && districtOk && programOk && partnerOk && trainerOk && courseOk;
     });
 }
 /** If the user’s filters exclude every loaded trainee, widen filters so the PDF still lists people (with toast). */
@@ -451,7 +439,8 @@ function filterProgramsForReport(allPrograms, rf, trainerDocs, partnerDocs, prog
         const programOk = rf.programId === 'all' || p.$id === rf.programId || String(p.documentId || '') === rf.programId;
         const trainerOk = trainerMatchesFilter(p, rf, trainerDocs);
         const partnerOk = programMatchesPartnerFilter(p, rf.partnerId, partnerDocs, programPartnerMap);
-        return yearOk && programOk && trainerOk && partnerOk;
+        const courseOk = programMatchesCourseFilter(p, rf.course);
+        return yearOk && programOk && trainerOk && partnerOk && courseOk;
     });
 }
 function resolveProgramsForPdf(allPrograms, userFilters, trainerDocs, partnerDocs, programPartnerMap) {
@@ -472,6 +461,7 @@ export default function ReportsPage() {
     const [filters, setFilters] = useState({
         year: 'all',
         programId: 'all',
+        course: 'all',
         gender: 'all',
         district: 'all',
         trainerId: 'all',
@@ -635,20 +625,22 @@ export default function ReportsPage() {
         const partList = src?.partners ?? partners;
         const trainList = src?.trainers ?? trainers;
         const programLabel = f.programId === 'all'
-            ? 'All programs'
+            ? COURSE_MODULE_LABELS.filterAll
             : (progList.find((p) => p.$id === f.programId)?.title || f.programId);
         const partnerLabel = f.partnerId === 'all'
             ? 'All partners'
             : (findPartnerById(partList, f.partnerId)?.name || f.partnerId);
         const trainerLabel = f.trainerId === 'all'
-            ? 'All trainers'
+            ? RETC_FACILITATOR_LABELS.filterAll
             : (findTrainerById(trainList, f.trainerId)?.name || f.trainerId);
+        const courseLabel = f.course === 'all' ? COURSE_MODULE_LABELS.filterAllCategories : getCourseLabel(f.course);
         return [
             ['Year', f.year === 'all' ? 'All years' : String(f.year)],
-            ['Program', programLabel],
+            [COURSE_MODULE_LABELS.reportFilterLabel, programLabel],
+            ['Course', courseLabel],
             ['Gender', f.gender === 'all' ? 'All genders' : String(f.gender)],
             ['District', f.district === 'all' ? 'All districts' : String(f.district)],
-            ['Trainer', trainerLabel],
+            [RETC_FACILITATOR_LABELS.reportFilterLabel, trainerLabel],
             ['Partner', partnerLabel],
         ];
     };
@@ -681,6 +673,7 @@ export default function ReportsPage() {
             const pdfProgramPartnerMap = buildProgramPartnerMapFromDocs(ppDocs);
             const programByMulti = buildProgramByAnyId(programDocs);
             const programTitleById = buildProgramTitleById(programDocs);
+            const programCourseById = Object.fromEntries(programDocs.map((p) => [p.$id, getCourseLabel(getCourseKeyFromProgram(p))]));
             const { rf, trainees, widenNote } = resolveTraineesForPdf(allTrainees, filters, programByMulti, pdfProgramPartnerMap, partnerDocs, trainerDocs);
             if (widenNote) {
                 toast({
@@ -713,11 +706,73 @@ export default function ReportsPage() {
                 formatStatusLabelForPdf(t.status),
                 new Date(t.$createdAt || t.created_at).toLocaleDateString(),
             ]);
-            const doc = new jsPDF('p', 'mm', 'a4');
+            const doc = new jsPDF('l', 'mm', 'a4');
             const { startY } = await layoutStyledReportHeader(doc, 'Trainees report');
             const cw = pdfContentWidthMm(doc);
             const filterSrc = { programs: programDocs, partners: partnerDocs, trainers: trainerDocs };
             let yNext = addStyledFilterTable(doc, startY, filterSrc, rf);
+            const levelByCategory = buildLevelByCourseCategory(trainees, programByMulti, getProgramIdFromTrainee);
+            const base = getPdfTableBase(doc);
+            if (levelByCategory.grandTotal > 0) {
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(11);
+                doc.setTextColor(51, 65, 85);
+                doc.text('PARTICIPANT LEVEL (SUMMARY)', REPORT_MARGIN_X, yNext);
+                yNext += 7;
+                autoTable(doc, {
+                    ...base,
+                    startY: yNext,
+                    head: [['Level', 'Count', '% of trainees in report']],
+                    body: levelSummaryPdfRows(levelByCategory.levelSummary),
+                    columnStyles: {
+                        0: { cellWidth: cw * 0.4, halign: 'left', textColor: [15, 23, 42] },
+                        1: { halign: 'right', fontStyle: 'bold' },
+                        2: { halign: 'right', fontStyle: 'bold', textColor: [4, 120, 87] },
+                    },
+                });
+                yNext = doc.lastAutoTable.finalY + 10;
+                const levelMatrixRows = levelByCategory.tableRows.length > 0
+                    ? levelByCategoryPdfRows(levelByCategory.tableRows)
+                    : [['No level data in scope', '—', '—', '—', '—', '—']];
+                const levelTableH = estimatePdfTableHeightMm(levelMatrixRows.length);
+                yNext = reservePdfVerticalSpace(doc, yNext, 7 + levelTableH);
+                yNext = drawPdfSectionHeading(doc, 'LEVEL BY COURSE CATEGORY', REPORT_MARGIN_X, yNext);
+                autoTable(doc, {
+                    ...base,
+                    theme: 'grid',
+                    tableWidth: cw,
+                    startY: yNext,
+                    head: [[
+                        COURSE_MODULE_LABELS.categoryFilterLabel,
+                        'Beginner (share of row)',
+                        'Technician (share of row)',
+                        'Trainer (share of row)',
+                        'Total',
+                        '% of all trainees',
+                    ]],
+                    body: levelMatrixRows,
+                    headStyles: { ...base.headStyles, fontSize: 8 },
+                    styles: { ...base.styles, fontSize: 8 },
+                    columnStyles: {
+                        0: { cellWidth: cw * 0.28, halign: 'left' },
+                        1: { halign: 'right' },
+                        2: { halign: 'right' },
+                        3: { halign: 'right' },
+                        4: { halign: 'right', fontStyle: 'bold' },
+                        5: { halign: 'right', fontStyle: 'bold', textColor: [4, 120, 87] },
+                    },
+                });
+                yNext = doc.lastAutoTable.finalY + 12;
+            }
+            if (trainees.length > 0) {
+                yNext = appendGenderReportSections(doc, yNext, {
+                    marginX: REPORT_MARGIN_X,
+                    contentWidth: cw,
+                    tableBase: base,
+                    trainees,
+                    programById: programByMulti,
+                });
+            }
             doc.setFont('helvetica', 'bold');
             doc.setFontSize(11);
             doc.setTextColor(51, 65, 85);
@@ -726,7 +781,6 @@ export default function ReportsPage() {
                 : `Registered trainees: ${trainees.length} people`;
             doc.text(traineeSectionTitle, REPORT_MARGIN_X, yNext);
             yNext += 7;
-            const base = getPdfTableBase(doc);
             const headStylesData = {
                 ...base.headStyles,
                 fillColor: [255, 136, 41],
@@ -737,43 +791,54 @@ export default function ReportsPage() {
                 ? 'No trainee records were returned from the database.'
                 : allTrainees.length === 0
                     ? 'No trainee records were returned from the database.'
-                    : 'No trainees could be included after widening filters. Check enrollments and program links in Appwrite.';
+                    : 'No trainees could be included after widening filters. Check enrollments and course links in Appwrite.';
             const body = trainees.length > 0
-                ? rows.map((r) => [r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[13]])
+                ? trainees.map((t) => {
+                    const pid = getProgramIdFromTrainee(t);
+                    return [
+                        t.name,
+                        t.email,
+                        t.phone || '',
+                        normalizeGender(t.gender),
+                        t.district || '',
+                        programTitleById[pid] || 'Unassigned',
+                        programCourseById[pid] || getCourseLabel(''),
+                        getTraineeLevelLabel(t.trainee_level_label ? t.trainee_level : t),
+                        formatCertificationLabel(t.certification_status || t.certificationStatus),
+                        formatStatusLabelForPdf(t.status),
+                    ];
+                })
                 : [[{
                         content: emptyTableMsg,
-                        colSpan: 8,
+                        colSpan: 10,
                         styles: { halign: 'center', fontStyle: 'italic', textColor: [100, 116, 139] },
                     }]];
-            /** Explicit mm widths (total = content width) so narrow % columns do not stack letters vertically. */
-            const tw = {
-                name: 26,
-                email: 44,
-                phone: 19,
-                gender: 16,
-                district: 17,
-                program: 30,
-                cert: 16,
-                status: 13,
-            };
             autoTable(doc, {
                 ...base,
                 startY: yNext,
                 tableWidth: cw,
-                styles: { ...base.styles, fontSize: 8.5, cellPadding: { top: 3, right: 3, bottom: 3, left: 3 } },
-                head: [['Name', 'Email', 'Phone', 'Gender', 'District', 'Program', 'Certification', 'Status']],
-                body,
-                headStyles: headStylesData,
-                columnStyles: {
-                    0: { cellWidth: tw.name, halign: 'left' },
-                    1: { cellWidth: tw.email, halign: 'left' },
-                    2: { cellWidth: tw.phone, halign: 'left' },
-                    3: { cellWidth: tw.gender, halign: 'left' },
-                    4: { cellWidth: tw.district, halign: 'left' },
-                    5: { cellWidth: tw.program, halign: 'left' },
-                    6: { cellWidth: tw.cert, halign: 'left' },
-                    7: { cellWidth: tw.status, halign: 'left' },
+                styles: {
+                    ...base.styles,
+                    fontSize: 8,
+                    overflow: 'linebreak',
+                    cellPadding: { top: 3, right: 3, bottom: 3, left: 3 },
+                    valign: 'top',
                 },
+                head: [[
+                    'Name',
+                    'Email',
+                    'Phone',
+                    'Gender',
+                    'District',
+                    COURSE_MODULE_LABELS.reportFilterLabel,
+                    'Category',
+                    'Level',
+                    'Certification',
+                    'Status',
+                ]],
+                body,
+                headStyles: { ...headStylesData, fontSize: 7.5 },
+                columnStyles: buildTraineesReportColumnStyles(cw),
             });
             addPdfPageFooters(doc);
             const programTitle = rf.programId === 'all'
@@ -785,7 +850,12 @@ export default function ReportsPage() {
             const trainerName = rf.trainerId === 'all'
                 ? ''
                 : (findTrainerById(trainerDocs, rf.trainerId)?.name || '');
-            doc.save(buildTraineesReportFilename(rf, { programTitle, partnerName, trainerName }));
+            doc.save(buildTraineesReportFilename(rf, {
+                programTitle,
+                partnerName,
+                trainerName,
+                courseLabel: rf.course === 'all' ? '' : getCourseLabel(rf.course),
+            }));
         }
         catch (error) {
             console.error('Error generating report:', error);
@@ -803,7 +873,7 @@ export default function ReportsPage() {
         try {
             setIsGenerating(true);
             if (!databases || !DB_ID || !COLLECTIONS.PROGRAMS) {
-                throw new Error('Programs collection is not configured.');
+                throw new Error('Courses collection is not configured.');
             }
             const allPrograms = await fetchAllReportDocuments(COLLECTIONS.PROGRAMS);
             const { rf, programs: programList, widenNote: programsWidenNote } = resolveProgramsForPdf(allPrograms, filters, trainers, partners, programPartnerMap);
@@ -818,8 +888,9 @@ export default function ReportsPage() {
             const rows = programList.map((p) => [
                 p.$id,
                 p.title,
+                getCourseLabel(getCourseKeyFromProgram(p)),
                 p.training_partner || p.trainingPartner || partnerById[getRelationshipId(p.training_partner_id || p.trainingPartnerId)] || '',
-                (programPartnerMap[p.$id] || []).map((id) => partnerById[id]).filter(Boolean).join(', '),
+                getOtherPartnerNamesForProgram(p.$id, programPartnerMap, partnerById),
                 p.training_location || p.trainingLocation || p.location || p.venue || '',
                 p.description || '',
                 new Date(p.start_date || p.startDate || p['start-date']).toLocaleDateString(),
@@ -828,55 +899,59 @@ export default function ReportsPage() {
                 p.status,
                 new Date(p.$createdAt || p.created_at).toLocaleDateString(),
             ]);
-            const doc = new jsPDF('p', 'mm', 'a4');
-            const { startY } = await layoutStyledReportHeader(doc, 'Programs report');
+            const doc = new jsPDF('l', 'mm', 'a4');
+            const { startY } = await layoutStyledReportHeader(doc, 'Courses report');
             const cw = pdfContentWidthMm(doc);
             let yNext = addStyledFilterTable(doc, startY, null, rf);
             doc.setFont('helvetica', 'bold');
             doc.setFontSize(11);
             doc.setTextColor(51, 65, 85);
             const programSectionTitle = programList.length === 1
-                ? 'Training programs: 1 program'
-                : `Training programs: ${programList.length} programs`;
+                ? 'Training courses: 1 course'
+                : `Training courses: ${programList.length} courses`;
             doc.text(programSectionTitle, REPORT_MARGIN_X, yNext);
             yNext += 7;
             const base = getPdfTableBase(doc);
-            const headStylesData = { ...base.headStyles, fillColor: [255, 136, 41], fontSize: 8, halign: 'left' };
+            const headStylesData = {
+                ...base.headStyles,
+                fillColor: [255, 136, 41],
+                fontSize: 7.5,
+                halign: 'left',
+                valign: 'middle',
+                cellPadding: { top: 3, right: 2, bottom: 3, left: 2 },
+            };
             const progBody = programList.length > 0
-                ? rows.map((r) => [r[1], r[2], r[3], r[4], r[6], r[7], r[8], formatStatusLabelForPdf(r[9])])
+                ? rows.map((r) => [r[1], r[2], r[3], r[4], r[5], r[7], r[8], r[9], formatStatusLabelForPdf(r[10])])
                 : [[{
-                        content: 'No programs match the selected filters.',
-                        colSpan: 8,
+                        content: `No ${COURSE_MODULE_LABELS.modulePlural} match the selected filters.`,
+                        colSpan: 9,
                         styles: { halign: 'center', fontStyle: 'italic', textColor: [100, 116, 139] },
                     }]];
-            const pw = {
-                title: 24,
-                partner: 18,
-                other: 30,
-                location: 20,
-                start: 16,
-                weeks: 12,
-                cap: 11,
-                status: 13,
-            };
             autoTable(doc, {
                 ...base,
                 startY: yNext,
                 tableWidth: cw,
-                styles: { ...base.styles, fontSize: 8.5, cellPadding: { top: 3, right: 3, bottom: 3, left: 3 } },
-                head: [['Program', 'Training partner', 'Other partners', 'Location', 'Start date', 'Weeks', 'Capacity', 'Status']],
+                styles: {
+                    ...base.styles,
+                    fontSize: 8,
+                    overflow: 'linebreak',
+                    cellPadding: { top: 3, right: 3, bottom: 3, left: 3 },
+                    valign: 'top',
+                },
+                head: [[
+                    COURSE_MODULE_LABELS.reportFilterLabel,
+                    'Category',
+                    'Training partner',
+                    'Other partners',
+                    'Location',
+                    'Start',
+                    'Weeks',
+                    'Cap.',
+                    'Status',
+                ]],
                 body: progBody,
                 headStyles: headStylesData,
-                columnStyles: {
-                    0: { cellWidth: pw.title, halign: 'left' },
-                    1: { cellWidth: pw.partner, halign: 'left' },
-                    2: { cellWidth: pw.other, halign: 'left' },
-                    3: { cellWidth: pw.location, halign: 'left' },
-                    4: { cellWidth: pw.start, halign: 'left' },
-                    5: { cellWidth: pw.weeks, halign: 'left' },
-                    6: { cellWidth: pw.cap, halign: 'left' },
-                    7: { cellWidth: pw.status, halign: 'left' },
-                },
+                columnStyles: buildProgramsReportColumnStyles(cw),
             });
             addPdfPageFooters(doc);
             const programTitle = rf.programId === 'all'
@@ -888,7 +963,12 @@ export default function ReportsPage() {
             const trainerName = rf.trainerId === 'all'
                 ? ''
                 : (findTrainerById(trainers, rf.trainerId)?.name || '');
-            doc.save(buildProgramsReportFilename(rf, { programTitle, partnerName, trainerName }));
+            doc.save(buildProgramsReportFilename(rf, {
+                programTitle,
+                partnerName,
+                trainerName,
+                courseLabel: rf.course === 'all' ? '' : getCourseLabel(rf.course),
+            }));
         }
         catch (error) {
             console.error('Error generating report:', error);
@@ -903,94 +983,21 @@ export default function ReportsPage() {
         }
     };
     return (<div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-6 sm:mb-8">
-        <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl lg:text-4xl">Reports</h1>
-        <p className="mt-2 text-gray-600">Generate filtered reports by year, training program, gender, district, and trainer</p>
+      <div className="mb-4 sm:mb-6">
+        <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Reports</h1>
+        <p className="mt-1 text-sm text-gray-600">Generate filtered PDF reports with percentage summaries and participant level by course category</p>
       </div>
 
-      <Card className="mb-6 border-[#047857]/20 bg-[#047857]/[0.06] p-4 sm:mb-8 sm:p-6">
-        <div className="flex gap-3">
-          <AlertCircle className="h-5 w-5 shrink-0 text-[#047857]"/>
-          <p className="text-sm text-slate-700">
-            PDFs use <span className="font-medium">live data</span> from Appwrite (trainees and programs are loaded in full, up to the configured limits). Filters apply to the export. Admins and managers can both download reports from this page.
-          </p>
-        </div>
-      </Card>
-
-      <Card className="mb-6 p-4 sm:mb-8 sm:p-6">
-        <h3 className="mb-4 text-lg font-semibold text-gray-900">Report Filters</h3>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <div className="space-y-2">
-            <Label>Year</Label>
-            <Select value={filters.year} onValueChange={(value) => handleFilterChange('year', value)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All years</SelectItem>
-                {reportYears.map((year) => (<SelectItem key={year} value={year}>{year}</SelectItem>))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>Training Program</Label>
-            <Select value={filters.programId} onValueChange={(value) => handleFilterChange('programId', value)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All programs</SelectItem>
-                {programs.map((program) => (<SelectItem key={program.$id} value={program.$id}>{program.title || 'Untitled'}</SelectItem>))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>Gender</Label>
-            <Select value={filters.gender} onValueChange={(value) => handleFilterChange('gender', value)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All genders</SelectItem>
-                <SelectItem value="Male">Male</SelectItem>
-                <SelectItem value="Female">Female</SelectItem>
-                <SelectItem value="Other">Other</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>District</Label>
-            <Input
-              value={filters.district === 'all' ? '' : filters.district}
-              onChange={(e) => handleFilterChange('district', e.target.value.trim() ? e.target.value : 'all')}
-              placeholder="Type district name"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>Trainer</Label>
-            <Select value={filters.trainerId} onValueChange={(value) => handleFilterChange('trainerId', value)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All trainers</SelectItem>
-                {trainers.map((trainer) => (<SelectItem key={trainer.$id} value={trainer.$id}>{trainer.name || 'Unnamed Trainer'}</SelectItem>))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>Partner</Label>
-            <Select value={filters.partnerId} onValueChange={(value) => handleFilterChange('partnerId', value)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All partners</SelectItem>
-                {partners.map((partner) => (<SelectItem key={partner.$id} value={partner.$id}>{partner.name || 'Unnamed Partner'}</SelectItem>))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
+      <Card className="mb-4 p-3 sm:mb-6 sm:p-4">
+        <h3 className="mb-2 text-sm font-semibold text-gray-900">Report filters</h3>
+        <ReportFilterFields
+          filters={filters}
+          onFilterChange={handleFilterChange}
+          reportYears={reportYears}
+          programs={programs}
+          trainers={trainers}
+          partners={partners}
+        />
       </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1015,9 +1022,9 @@ export default function ReportsPage() {
         <Card className="p-6">
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h3 className="text-lg font-semibold text-gray-900">Programs Report</h3>
+              <h3 className="text-lg font-semibold text-gray-900">Courses Report</h3>
               <p className="text-gray-600 text-sm mt-1">
-                Export a branded PDF with active filters and program schedule rows
+                Export a branded PDF with active filters and course schedule rows
               </p>
             </div>
             <FileText className="h-8 w-8 text-green-500 opacity-20"/>
@@ -1036,13 +1043,13 @@ export default function ReportsPage() {
           <div>
             <h4 className="font-medium text-gray-900">Trainees Report</h4>
             <p className="text-gray-600 text-sm mt-1">
-              Contains filtered trainee records with contact details, district, gender, qualification, training program, and participation status.
+              Contains filtered trainee records with contact details, district, gender, qualification, course, course category, and participation status.
             </p>
           </div>
           <div className="border-t border-gray-200 pt-4">
-            <h4 className="font-medium text-gray-900">Programs Report</h4>
+            <h4 className="font-medium text-gray-900">Courses Report</h4>
             <p className="text-gray-600 text-sm mt-1">
-              Includes filtered training programs with schedules, maximum capacity, and current status.
+              Includes filtered training courses with schedules, maximum capacity, and current status.
             </p>
           </div>
         </div>

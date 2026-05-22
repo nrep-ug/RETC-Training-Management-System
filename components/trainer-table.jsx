@@ -4,17 +4,18 @@ import { Pencil, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { useClientPagination } from '@/hooks/use-client-pagination';
 import { TablePaginationFooter } from '@/components/table-pagination-footer';
+import { getRetcFacilitatorRoleLabel, RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
 export function TrainerTable({ trainers, isLoading, onEdit, onDelete, isAdmin, paginationResetKey = '', }) {
     const pagination = useClientPagination(trainers, { resetKey: paginationResetKey });
     if (isLoading) {
         return (<div className="p-8 text-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#047857] mx-auto mb-4"></div>
-        <p className="text-gray-600">Loading trainers...</p>
+        <p className="text-gray-600">Loading {RETC_FACILITATOR_LABELS.modulePlural}...</p>
       </div>);
     }
     if (trainers.length === 0) {
         return (<div className="p-8 text-center">
-        <p className="text-gray-600">No trainers found. {isAdmin && 'Create one to get started.'}</p>
+        <p className="text-gray-600">No {RETC_FACILITATOR_LABELS.modulePlural} found. {isAdmin && 'Create one to get started.'}</p>
       </div>);
     }
     const { pagedItems, page, setPage, pageSize, setPageSize, total, totalPages, rangeFrom, rangeTo, } = pagination;
@@ -26,7 +27,7 @@ export function TrainerTable({ trainers, isLoading, onEdit, onDelete, isAdmin, p
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Name</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Experience</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Specialization</th>
-            <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Training Partner</th>
+            <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Partner</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Role</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Email</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Phone</th>
@@ -40,7 +41,7 @@ export function TrainerTable({ trainers, isLoading, onEdit, onDelete, isAdmin, p
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.years_of_experience}</td>
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.specialization || '-'}</td>
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.training_partner || trainer.trainingPartner || trainer['training-partners'] || trainer.training_partners || trainer.organization || '-'}</td>
-              <td className="px-3 py-3 text-sm capitalize text-gray-600 sm:px-4 sm:py-4">{String(trainer.role || '').replace('_', ' ') || '-'}</td>
+              <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{getRetcFacilitatorRoleLabel(trainer.role)}</td>
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.email || '-'}</td>
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.phone || '-'}</td>
               <td className="px-3 py-3 text-sm sm:px-4 sm:py-4">
