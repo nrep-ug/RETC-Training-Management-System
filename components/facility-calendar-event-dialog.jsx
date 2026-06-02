@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { formatEventDateRange } from '@/lib/facility-calendar';
+import { formatEventDateRange, getStatusBadgeClass } from '@/lib/facility-calendar';
 import { FACILITY_CALENDAR_LABELS } from '@/lib/facility-calendar-labels';
 import { Button } from '@/components/ui/button';
 import {
@@ -13,12 +13,7 @@ import {
 } from '@/components/ui/dialog';
 
 function statusBadgeClass(status) {
-    const s = String(status || '').toLowerCase();
-    if (s === 'ongoing')
-        return 'bg-[#ff8829]/15 text-[#9a3f05]';
-    if (s === 'completed')
-        return 'bg-emerald-100 text-emerald-800';
-    return 'bg-[#047857]/10 text-[#047857]';
+    return getStatusBadgeClass(status);
 }
 
 export function FacilityCalendarEventDialog({
