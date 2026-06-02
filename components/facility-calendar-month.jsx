@@ -1,7 +1,6 @@
 'use client';
 
 import {
-    addMonths,
     eachDayOfInterval,
     endOfMonth,
     endOfWeek,
@@ -11,11 +10,8 @@ import {
     isWeekend,
     startOfMonth,
     startOfWeek,
-    subMonths,
 } from 'date-fns';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { formatEventDateRange } from '@/lib/facility-calendar';
+import { formatEventDateRange, getStatusBarClass } from '@/lib/facility-calendar';
 
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -79,32 +75,13 @@ function buildWeekSegments(weekDays, events) {
     return segments;
 }
 
-function getBarVisual(status, hasOverlap) {
-    const s = String(status || '').toLowerCase();
-    if (s === 'ongoing') {
-        return {
-            bar: 'bg-gradient-to-r from-[#ff8829] to-[#f59e0b] text-white shadow-sm',
-            dot: 'bg-[#ff8829]',
-        };
-    }
-    if (s === 'completed') {
-        return {
-            bar: 'bg-gradient-to-r from-emerald-700 to-emerald-600 text-white shadow-sm',
-            dot: 'bg-emerald-600',
-        };
-    }
-    return {
-        bar: 'bg-gradient-to-r from-[#047857] to-[#0b8d68] text-white shadow-sm',
-        dot: 'bg-[#047857]',
-    };
-}
-
 export function FacilityCalendarMonth({
     monthDate,
     events = [],
-    onMonthChange,
     onSelectEvent,
+    onSelectDay,
     legend,
+    hideNavigation = false,
 }) {
     const monthStart = startOfMonth(monthDate);
     const gridStart = startOfWeek(monthStart, { weekStartsOn: 1 });
@@ -114,47 +91,13 @@ export function FacilityCalendarMonth({
 
     return (
         <div className="overflow-hidden rounded-2xl border border-[#047857]/15 bg-white shadow-lg">
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-[#047857] via-[#0b8d68] to-[#ff8829] px-4 py-4 sm:px-5">
-                <div>
-                    <p className="text-xs font-medium uppercase tracking-wider text-white/80">
-                        RETC facility
-                    </p>
-                    <h2 className="text-xl font-bold text-white sm:text-2xl">
+            {!hideNavigation && (
+                <div className="bg-gradient-to-r from-[#047857] via-[#0b8d68] to-[#ff8829] px-4 py-3 sm:px-5">
+                    <h2 className="text-lg font-bold text-white sm:text-xl">
                         {format(monthDate, 'MMMM yyyy')}
                     </h2>
                 </div>
-                <div className="flex items-center gap-1.5">
-                    <Button
-                        type="button"
-                        variant="secondary"
-                        size="icon"
-                        className="h-8 w-8 border-0 bg-white/20 text-white hover:bg-white/30"
-                        aria-label="Previous month"
-                        onClick={() => onMonthChange(subMonths(monthDate, 1))}
-                    >
-                        <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        className="h-8 border-0 bg-white/20 text-white hover:bg-white/30"
-                        onClick={() => onMonthChange(new Date())}
-                    >
-                        Today
-                    </Button>
-                    <Button
-                        type="button"
-                        variant="secondary"
-                        size="icon"
-                        className="h-8 w-8 border-0 bg-white/20 text-white hover:bg-white/30"
-                        aria-label="Next month"
-                        onClick={() => onMonthChange(addMonths(monthDate, 1))}
-                    >
-                        <ChevronRight className="h-4 w-4" />
-                    </Button>
-                </div>
-            </div>
+            )}
 
             {legend && (
                 <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 bg-slate-50/80 px-4 py-2.5 text-xs text-slate-600">
@@ -187,10 +130,12 @@ export function FacilityCalendarMonth({
                                     const today = isToday(day);
                                     const weekend = isWeekend(day);
                                     return (
-                                        <div
+                                        <button
                                             key={day.toISOString()}
-                                            className={`min-h-[52px] border-r border-slate-100 px-2 pt-2 last:border-r-0 ${
-                                                !inMonth ? 'bg-slate-50/60' : weekend ? 'bg-slate-50/40' : 'bg-white'
+                                            type="button"
+                                            onClick={() => inMonth && onSelectDay?.(day)}
+                                            className={`min-h-[52px] border-r border-slate-100 px-2 pt-2 text-left last:border-r-0 ${
+                                                !inMonth ? 'bg-slate-50/60' : weekend ? 'bg-slate-50/40 hover:bg-[#047857]/5' : 'bg-white hover:bg-[#047857]/5'
                                             }`}
                                         >
                                             <span
@@ -204,7 +149,7 @@ export function FacilityCalendarMonth({
                                             >
                                                 {format(day, 'd')}
                                             </span>
-                                        </div>
+                                        </button>
                                     );
                                 })}
                             </div>
@@ -224,7 +169,6 @@ export function FacilityCalendarMonth({
                                         />
                                     ))}
                                     {segments.map((seg) => {
-                                        const styles = getBarVisual(seg.event.status, seg.event.hasOverlap);
                                         const leftPct = (seg.colStart / 7) * 100;
                                         const widthPct = (seg.span / 7) * 100;
                                         return (
@@ -233,7 +177,7 @@ export function FacilityCalendarMonth({
                                                 type="button"
                                                 title={`${seg.event.title}\n${formatEventDateRange(seg.event.start, seg.event.end)}\n${seg.event.trainingPartner}`}
                                                 onClick={() => onSelectEvent?.(seg.event)}
-                                                className={`absolute z-10 mx-[2px] flex h-7 items-center overflow-hidden rounded-md px-2 text-left text-[11px] font-medium transition hover:brightness-110 sm:text-xs ${styles.bar} ${
+                                                className={`absolute z-10 mx-[2px] flex h-7 items-center overflow-hidden rounded-md px-2 text-left text-[11px] font-medium transition hover:brightness-110 sm:text-xs ${getStatusBarClass(seg.event.status)} ${
                                                     seg.event.hasOverlap ? 'ring-2 ring-red-400 ring-offset-1' : ''
                                                 } ${seg.continuesBefore ? 'rounded-l-sm' : ''} ${seg.continuesAfter ? 'rounded-r-sm' : ''}`}
                                                 style={{
