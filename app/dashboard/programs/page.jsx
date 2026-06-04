@@ -162,7 +162,7 @@ function isUnknownCourseAttributeError(message) {
     return /Unknown attribute:\s*["']course["']/i.test(msg);
 }
 function throwCourseAttributeSetupError() {
-    throw new Error('Appwrite does not have a `course` attribute (course category) on your courses collection yet. In Appwrite Console → Database → programs collection → Attributes, create an Enum named exactly `course` with the six catalogue keys, click Update/Create, then refresh this page. Also confirm NEXT_PUBLIC_APPWRITE_PROGRAMS_COLLECTION_ID in .env.local matches that collection.');
+    throw new Error('Appwrite does not have a `course` attribute (course category) on your courses collection yet. In Appwrite Console → Database → programs collection → Attributes, create an Enum named exactly `course` with all catalogue keys from lib/renewable-energy-courses.js, click Update/Create, then refresh this page. Also confirm NEXT_PUBLIC_APPWRITE_PROGRAMS_COLLECTION_ID in .env.local matches that collection.');
 }
 async function createProgramWithFallback(data) {
     const payloads = buildProgramPayloadCandidates(data);
