@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/components/auth-provider';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
+import { fetchAllDocuments } from '@/lib/fetch-all-documents';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Plus } from 'lucide-react';
@@ -143,8 +144,8 @@ export default function TrainersPage() {
         }
         try {
             setIsPartnersLoading(true);
-            const response = await databases.listDocuments(DB_ID, COLLECTIONS.PARTNERS);
-            setPartners(response.documents);
+            const docs = await fetchAllDocuments(databases, DB_ID, COLLECTIONS.PARTNERS);
+            setPartners(docs);
         }
         catch (error) {
             console.error('Error fetching partners for trainer assignment:', error);
@@ -157,8 +158,8 @@ export default function TrainersPage() {
     const fetchTrainers = async () => {
         try {
             setIsLoading(true);
-            const response = await databases.listDocuments(DB_ID, COLLECTIONS.TRAINERS);
-            setTrainers(response.documents);
+            const docs = await fetchAllDocuments(databases, DB_ID, COLLECTIONS.TRAINERS);
+            setTrainers(docs);
         }
         catch (error) {
             console.error('Error fetching trainers:', error);

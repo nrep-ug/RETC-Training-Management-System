@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/components/auth-provider';
 import { Query } from 'appwrite';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
+import { fetchAllDocuments } from '@/lib/fetch-all-documents';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -39,28 +40,7 @@ function sanitizePartnerPayload(data) {
     return cleaned;
 }
 async function fetchAllPartnerDocuments() {
-    if (!databases || !DB_ID || !COLLECTIONS.PARTNERS)
-        return [];
-    const out = [];
-    let cursor = null;
-    const pageSize = 250;
-    const maxDocs = 50000;
-    while (out.length < maxDocs) {
-        const queries = [Query.limit(pageSize), Query.orderAsc('$id')];
-        if (cursor)
-            queries.push(Query.cursorAfter(cursor));
-        const res = await databases.listDocuments(DB_ID, COLLECTIONS.PARTNERS, queries, undefined, true);
-        const batch = res.documents || [];
-        if (!batch.length)
-            break;
-        out.push(...batch);
-        if (batch.length < pageSize)
-            break;
-        if (typeof res.total === 'number' && out.length >= res.total)
-            break;
-        cursor = batch[batch.length - 1].$id;
-    }
-    return out;
+    return fetchAllDocuments(databases, DB_ID, COLLECTIONS.PARTNERS);
 }
 /** Blocks duplicate partner org name / email only. Contact person (and phone) may repeat across partners. */
 async function assertNoPartnerDuplicates(payload, { excludeId = '', localPartners = [] } = {}) {

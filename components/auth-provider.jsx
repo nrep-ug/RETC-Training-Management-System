@@ -7,6 +7,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Query } from 'appwrite';
 import { account, databases, DB_ID, COLLECTIONS, isAppwriteConfigured } from '@/lib/appwrite';
+import { fetchAllDocuments } from '@/lib/fetch-all-documents';
 import { UserRole, normalizeUserRole } from '@/lib/types';
 import { devLog } from '@/lib/logger';
 import { useRouter } from 'next/navigation';
@@ -59,8 +60,8 @@ async function findUserByEmailInsensitive(email) {
         return exact.documents[0];
     }
     // Fallback for databases with mixed-case emails or inconsistent old records.
-    const allUsers = await databases.listDocuments(DB_ID, COLLECTIONS.USERS);
-    const matches = allUsers.documents.filter((u) => String(u?.email || '').trim().toLowerCase() === normalizedEmail);
+    const allUsers = await fetchAllDocuments(databases, DB_ID, COLLECTIONS.USERS);
+    const matches = allUsers.filter((u) => String(u?.email || '').trim().toLowerCase() === normalizedEmail);
     if (matches.length === 0) {
         return null;
     }

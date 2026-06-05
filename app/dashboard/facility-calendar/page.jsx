@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Query } from 'appwrite';
 import { useAuth } from '@/components/auth-provider';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
+import { fetchAllDocuments } from '@/lib/fetch-all-documents';
 import { ProgramStatus } from '@/lib/types';
 import { getCourseKeyFromProgram, getCourseLabel } from '@/lib/renewable-energy-courses';
 import { buildProgramPartnerMapFromRows } from '@/lib/program-partner-sync';
@@ -71,29 +71,6 @@ function normalizeProgramDoc(program) {
     };
 }
 
-async function fetchAllCollectionDocuments(collectionId, { maxDocs = 50000, pageSize = 250 } = {}) {
-    if (!databases || !DB_ID || !collectionId)
-        return [];
-    const out = [];
-    let cursor = null;
-    while (out.length < maxDocs) {
-        const queries = [Query.limit(pageSize), Query.orderAsc('$id')];
-        if (cursor)
-            queries.push(Query.cursorAfter(cursor));
-        const res = await databases.listDocuments(DB_ID, collectionId, queries, undefined, true);
-        const batch = res.documents || [];
-        if (!batch.length)
-            break;
-        out.push(...batch);
-        if (batch.length < pageSize)
-            break;
-        if (typeof res.total === 'number' && out.length >= res.total)
-            break;
-        cursor = batch[batch.length - 1].$id;
-    }
-    return out;
-}
-
 function LegendPill({ color, label }) {
     return (
         <span className="inline-flex items-center gap-1.5">
@@ -132,21 +109,21 @@ export default function FacilityCalendarPage() {
             if (!databases || !DB_ID || !COLLECTIONS.PROGRAMS) {
                 throw new Error('Courses collection is not configured.');
             }
-            const [programRes, partnerRes] = await Promise.all([
-                databases.listDocuments(DB_ID, COLLECTIONS.PROGRAMS),
+            const [programDocs, partnerDocs] = await Promise.all([
+                fetchAllDocuments(databases, DB_ID, COLLECTIONS.PROGRAMS),
                 COLLECTIONS.PARTNERS
-                    ? databases.listDocuments(DB_ID, COLLECTIONS.PARTNERS)
-                    : Promise.resolve({ documents: [] }),
+                    ? fetchAllDocuments(databases, DB_ID, COLLECTIONS.PARTNERS)
+                    : Promise.resolve([]),
             ]);
-            const normalized = (programRes.documents || []).map(normalizeProgramDoc);
+            const normalized = programDocs.map(normalizeProgramDoc);
             setPrograms(normalized);
-            setPartners(partnerRes.documents || []);
+            setPartners(partnerDocs);
 
             if (COLLECTIONS.PROGRAM_PARTNERS) {
                 const ids = normalized.map((p) => p.$id).filter(Boolean);
-                const rows = await fetchAllCollectionDocuments(COLLECTIONS.PROGRAM_PARTNERS);
+                const rows = await fetchAllDocuments(databases, DB_ID, COLLECTIONS.PROGRAM_PARTNERS);
                 setProgramPartnerMap(
-                    buildProgramPartnerMapFromRows(rows, ids, normalized, partnerRes.documents || []),
+                    buildProgramPartnerMapFromRows(rows, ids, normalized, partnerDocs),
                 );
             }
             else {

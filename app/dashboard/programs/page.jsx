@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { Query } from 'appwrite';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
+import { fetchAllDocuments } from '@/lib/fetch-all-documents';
 import { ProgramStatus } from '@/lib/types';
 import { assertValidCourseKey, getCourseKeyFromProgram, getCourseLabel, getCourseFilterSelectOptions, programMatchesCourseFilter, } from '@/lib/renewable-energy-courses';
 import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
@@ -256,29 +257,6 @@ function getRelationshipId(value) {
     }
     return '';
 }
-/** Paginate past Appwrite default list limits so every program–partner link is loaded. */
-async function fetchAllCollectionDocuments(collectionId, { maxDocs = 50000, pageSize = 250 } = {}) {
-    if (!databases || !DB_ID || !collectionId)
-        return [];
-    const out = [];
-    let cursor = null;
-    while (out.length < maxDocs) {
-        const queries = [Query.limit(pageSize), Query.orderAsc('$id')];
-        if (cursor)
-            queries.push(Query.cursorAfter(cursor));
-        const res = await databases.listDocuments(DB_ID, collectionId, queries, undefined, true);
-        const batch = res.documents || [];
-        if (!batch.length)
-            break;
-        out.push(...batch);
-        if (batch.length < pageSize)
-            break;
-        if (typeof res.total === 'number' && out.length >= res.total)
-            break;
-        cursor = batch[batch.length - 1].$id;
-    }
-    return out;
-}
 /** Load only join rows for one program — avoids scanning the whole table on every save (was freezing "Saving…"). */
 async function listProgramPartnerJoinsForProgram(programId) {
     if (!databases || !DB_ID || !COLLECTIONS.PROGRAM_PARTNERS || !programId)
@@ -298,7 +276,7 @@ async function listProgramPartnerJoinsForProgram(programId) {
             /* collection may use a different attribute name */
         }
     }
-    const all = await fetchAllCollectionDocuments(COLLECTIONS.PROGRAM_PARTNERS);
+    const all = await fetchAllDocuments(databases, DB_ID, COLLECTIONS.PROGRAM_PARTNERS);
     return all.filter((row) => getProgramIdFromPartnerJoin(row) === pid);
 }
 function buildBackfillProgramData(program) {
@@ -373,8 +351,8 @@ export default function ProgramsPage() {
         }
         try {
             setIsPartnersLoading(true);
-            const response = await databases.listDocuments(DB_ID, COLLECTIONS.PARTNERS);
-            setPartners(response.documents);
+            const docs = await fetchAllDocuments(databases, DB_ID, COLLECTIONS.PARTNERS);
+            setPartners(docs);
         }
         catch (error) {
             console.error('Error fetching partners for program assignment:', error);
@@ -391,8 +369,8 @@ export default function ProgramsPage() {
         }
         try {
             setIsTrainersLoading(true);
-            const response = await databases.listDocuments(DB_ID, COLLECTIONS.TRAINERS);
-            setTrainers(response.documents);
+            const docs = await fetchAllDocuments(databases, DB_ID, COLLECTIONS.TRAINERS);
+            setTrainers(docs);
         }
         catch (error) {
             console.error('Error fetching trainers for program assignment:', error);
@@ -408,8 +386,8 @@ export default function ProgramsPage() {
             if (!databases || !DB_ID || !COLLECTIONS.PROGRAMS) {
                 throw new Error('Courses collection is not configured. Check your Appwrite environment variables.');
             }
-            const response = await databases.listDocuments(DB_ID, COLLECTIONS.PROGRAMS);
-            const withDates = await Promise.all(response.documents.map(async (program) => {
+            const programDocs = await fetchAllDocuments(databases, DB_ID, COLLECTIONS.PROGRAMS);
+            const withDates = await Promise.all(programDocs.map(async (program) => {
                 const normalized = normalizeProgramDoc(program);
                 const hasPersistedDates = Boolean(program.start_date || program.startDate || program['start-date'])
                     && Boolean(program.end_date || program.endDate || program['end-date'] || program['end-time']);
@@ -451,7 +429,7 @@ export default function ProgramsPage() {
         }
         const fetchSeq = ++partnerFetchSeqRef.current;
         try {
-            const allRows = await fetchAllCollectionDocuments(COLLECTIONS.PROGRAM_PARTNERS);
+            const allRows = await fetchAllDocuments(databases, DB_ID, COLLECTIONS.PROGRAM_PARTNERS);
             if (fetchSeq !== partnerFetchSeqRef.current)
                 return;
             const nextMap = buildProgramPartnerMapFromRows(allRows, programIds, programsSnapshot, partnersSnapshot);
@@ -509,7 +487,7 @@ export default function ProgramsPage() {
             return;
         try {
             if (COLLECTIONS.PROGRAM_PARTNERS) {
-                const assignmentRows = await fetchAllCollectionDocuments(COLLECTIONS.PROGRAM_PARTNERS);
+                const assignmentRows = await fetchAllDocuments(databases, DB_ID, COLLECTIONS.PROGRAM_PARTNERS);
                 const linkedRows = assignmentRows.filter((row) => getProgramIdFromPartnerJoin(row) === pendingDeleteId);
                 for (const row of linkedRows) {
                     await databases.deleteDocument(DB_ID, COLLECTIONS.PROGRAM_PARTNERS, row.$id);
