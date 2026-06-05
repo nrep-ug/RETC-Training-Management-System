@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Query } from 'appwrite';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
+import { fetchAllDocuments } from '@/lib/fetch-all-documents';
 import { AnalyticsFilterFields } from '@/components/analytics-filter-fields';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -162,28 +163,6 @@ function isPartnerActive(partner) {
     const status = String(partner?.status || '').trim().toLowerCase();
     // Treat missing/legacy status as active; only explicit "inactive" is excluded.
     return status !== 'inactive';
-}
-async function fetchAllDocuments(databases, databaseId, collectionId, { maxDocs = 100000, pageSize = 250 } = {}) {
-    if (!databases || !databaseId || !collectionId)
-        return [];
-    const out = [];
-    let cursor = null;
-    while (out.length < maxDocs) {
-        const queries = [Query.limit(pageSize), Query.orderAsc('$id')];
-        if (cursor)
-            queries.push(Query.cursorAfter(cursor));
-        const res = await databases.listDocuments(databaseId, collectionId, queries, undefined, true);
-        const batch = res.documents || [];
-        if (!batch.length)
-            break;
-        out.push(...batch);
-        if (batch.length < pageSize)
-            break;
-        if (typeof res.total === 'number' && out.length >= res.total)
-            break;
-        cursor = batch[batch.length - 1].$id;
-    }
-    return out;
 }
 function getTrainingPeriodWeeks(program) {
     const start = new Date(program.start_date || program.startDate || program['start-date'] || '');

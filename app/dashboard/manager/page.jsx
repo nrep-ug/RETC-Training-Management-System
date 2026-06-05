@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/components/auth-provider';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
+import { fetchAllDocuments } from '@/lib/fetch-all-documents';
 import { Card } from '@/components/ui/card';
 import { Users, BookOpen, TrendingUp, UserRoundCog, FileText, BarChart3 } from 'lucide-react';
 import Link from 'next/link';
@@ -53,13 +54,14 @@ export default function ManagerDashboard() {
         try {
             setIsLoading(true);
             // Fetch trainees count
-            const traineesResponse = await databases.listDocuments(DB_ID, COLLECTIONS.TRAINEES);
-            // Fetch programs count
-            const programsResponse = await databases.listDocuments(DB_ID, COLLECTIONS.PROGRAMS);
-            const activePrograms = programsResponse.documents.filter((p) => p.status === 'ongoing').length;
+            const [traineeDocs, programDocs] = await Promise.all([
+                fetchAllDocuments(databases, DB_ID, COLLECTIONS.TRAINEES),
+                fetchAllDocuments(databases, DB_ID, COLLECTIONS.PROGRAMS),
+            ]);
+            const activePrograms = programDocs.filter((p) => p.status === 'ongoing').length;
             setStats({
-                totalTrainees: traineesResponse.total,
-                totalPrograms: programsResponse.total,
+                totalTrainees: traineeDocs.length,
+                totalPrograms: programDocs.length,
                 activePrograms,
             });
         }

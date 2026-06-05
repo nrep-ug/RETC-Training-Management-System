@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Query } from 'appwrite';
 import { useAuth } from '@/components/auth-provider';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
+import { fetchAllDocuments } from '@/lib/fetch-all-documents';
 import { ReportFilterFields } from '@/components/report-filter-fields';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -168,57 +169,8 @@ async function listReportDocuments(collectionId, queries) {
     const res = await databases.listDocuments(DB_ID, collectionId, queries, undefined, true);
     return res.documents || [];
 }
-/**
- * Load all documents for PDFs. Prefer limit+offset (no attribute index required). Fall back to $id cursor, then plain list.
- */
-async function fetchAllReportDocuments(collectionId, { maxDocs = 25000, pageSize = 250 } = {}) {
-    if (!databases || !DB_ID || !collectionId)
-        return [];
-    const out = [];
-    try {
-        for (let offset = 0; offset < maxDocs; offset += pageSize) {
-            const queries = [Query.limit(pageSize), Query.offset(offset)];
-            const batch = await listReportDocuments(collectionId, queries);
-            if (!batch.length)
-                break;
-            out.push(...batch);
-            if (batch.length < pageSize)
-                break;
-        }
-        if (out.length > 0)
-            return out;
-    }
-    catch (err) {
-        devWarn('[reports] Offset pagination failed; trying cursor pagination:', collectionId, err);
-    }
-    let cursor = null;
-    try {
-        while (out.length < maxDocs) {
-            const queries = [Query.limit(pageSize), Query.orderAsc('$id')];
-            if (cursor)
-                queries.push(Query.cursorAfter(cursor));
-            const batch = await listReportDocuments(collectionId, queries);
-            if (!batch.length)
-                break;
-            out.push(...batch);
-            if (batch.length < pageSize)
-                break;
-            cursor = batch[batch.length - 1].$id;
-        }
-        if (out.length > 0)
-            return out;
-    }
-    catch (err) {
-        devWarn('[reports] Cursor pagination failed; trying limit-only:', collectionId, err);
-    }
-    try {
-        return await listReportDocuments(collectionId, [Query.limit(Math.min(maxDocs, 5000))]);
-    }
-    catch (err2) {
-        devWarn('[reports] Limit-only fetch failed; trying default listDocuments:', collectionId, err2);
-        const res = await databases.listDocuments(DB_ID, collectionId, undefined, undefined, true);
-        return res.documents || [];
-    }
+async function fetchAllReportDocuments(collectionId, options = {}) {
+    return fetchAllDocuments(databases, DB_ID, collectionId, options);
 }
 /** Loads a collection for reports; failures (wrong ID, ACL) do not break the rest of the page. */
 async function fetchReportCollectionOrEmpty(collectionId, logLabel) {

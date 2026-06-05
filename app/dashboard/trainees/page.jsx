@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/components/auth-provider';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
+import { fetchAllDocuments } from '@/lib/fetch-all-documents';
 import { TraineeStatus, TRAINEE_STATUS_HINT } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -274,8 +275,7 @@ export default function TraineesPage() {
             return [];
         }
         try {
-            const response = await databases.listDocuments(DB_ID, COLLECTIONS.PROGRAMS);
-            return response.documents;
+            return await fetchAllDocuments(databases, DB_ID, COLLECTIONS.PROGRAMS);
         }
         catch (error) {
             console.error('Error fetching programs for trainee form:', error);
@@ -294,8 +294,7 @@ export default function TraineesPage() {
         if (!databases || !DB_ID || !COLLECTIONS.TRAINERS)
             return [];
         try {
-            const response = await databases.listDocuments(DB_ID, COLLECTIONS.TRAINERS);
-            return response.documents;
+            return await fetchAllDocuments(databases, DB_ID, COLLECTIONS.TRAINERS);
         }
         catch (error) {
             console.error('Error fetching trainers for trainees:', error);
@@ -305,8 +304,7 @@ export default function TraineesPage() {
     const fetchEnrollments = async () => {
         if (!databases || !DB_ID || !COLLECTIONS.ENROLLMENTS)
             return [];
-        const response = await databases.listDocuments(DB_ID, COLLECTIONS.ENROLLMENTS);
-        return response.documents;
+        return await fetchAllDocuments(databases, DB_ID, COLLECTIONS.ENROLLMENTS);
     };
     const fetchTrainees = async () => {
         try {
@@ -314,8 +312,8 @@ export default function TraineesPage() {
             if (!databases || !DB_ID || !COLLECTIONS.TRAINEES) {
                 throw new Error('Trainees collection is not configured. Check your Appwrite environment variables.');
             }
-            const traineeResponse = await databases.listDocuments(DB_ID, COLLECTIONS.TRAINEES);
-            const [programDocs, enrollmentDocs, trainerDocs] = await Promise.all([
+            const [traineeDocs, programDocs, enrollmentDocs, trainerDocs] = await Promise.all([
+                fetchAllDocuments(databases, DB_ID, COLLECTIONS.TRAINEES),
                 fetchPrograms(),
                 fetchEnrollments(),
                 fetchTrainers(),
@@ -334,7 +332,7 @@ export default function TraineesPage() {
             })
                 .filter(([traineeId]) => !!traineeId));
             const programByIdSnapshot = Object.fromEntries(programDocs.map((p) => [p.$id, p]));
-            const mappedTrainees = traineeResponse.documents.map((t) => {
+            const mappedTrainees = traineeDocs.map((t) => {
                 const programId = enrollmentByTrainee[t.$id]?.program_id
                     || t.program_id
                     || t.programId
