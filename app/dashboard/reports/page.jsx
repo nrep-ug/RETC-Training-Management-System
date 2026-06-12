@@ -18,7 +18,13 @@ import {
     programMatchesCourseFilter,
     traineeMatchesCourseFilter,
 } from '@/lib/renewable-energy-courses';
-import { buildEnrollmentByTrainee, mergeTraineeWithEnrollment } from '@/lib/trainee-enrollment';
+import {
+    buildEnrollmentListsByTrainee,
+    expandTraineesByEnrollment,
+    getProgramIdsFromTrainee,
+    mergeTraineeWithEnrollment,
+    traineeMatchesProgramFilter,
+} from '@/lib/trainee-enrollment';
 import { devWarn } from '@/lib/logger';
 import { getTraineeStatusLabel } from '@/lib/types';
 import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
@@ -209,13 +215,14 @@ function collectReportYears(programDocs, traineeDocs) {
         const cy = getCreatedYear(t);
         if (cy)
             set.add(cy);
-        const pid = getProgramIdFromTrainee(t);
-        const prog = programById[pid];
-        if (prog) {
-            const sy = getYearFromProgramStart(prog);
-            if (sy)
-                set.add(sy);
-        }
+        getProgramIdsFromTrainee(t).forEach((pid) => {
+            const prog = programById[pid];
+            if (prog) {
+                const sy = getYearFromProgramStart(prog);
+                if (sy)
+                    set.add(sy);
+            }
+        });
     });
     return Array.from(set).sort((a, b) => Number(b) - Number(a));
 }
@@ -356,24 +363,39 @@ const REPORT_FILTERS_ALL = {
     trainerId: 'all',
     partnerId: 'all',
 };
+function enrollmentRowMatchesReportFilters(row, rf, programByMulti, pdfProgramPartnerMap, partnerDocs, trainerDocs) {
+    const traineeProgramId = getProgramIdFromTrainee(row);
+    const prog = programByMulti[traineeProgramId];
+    const programStartYear = prog ? getYearFromProgramStart(prog) : '';
+    const yearOk = rf.year === 'all'
+        || getCreatedYear(row) === rf.year
+        || (programStartYear !== '' && programStartYear === rf.year);
+    const genderOk = rf.gender === 'all' || normalizeGender(row.gender) === rf.gender;
+    const districtOk = districtMatchesFilter(row, rf);
+    const programOk = rf.programId === 'all'
+        || traineeProgramId === rf.programId
+        || (prog && (prog.$id === rf.programId || String(prog.documentId || '') === rf.programId));
+    const partnerOk = programMatchesPartnerFilter(prog, rf.partnerId, partnerDocs, pdfProgramPartnerMap);
+    const trainerOk = trainerMatchesFilter(prog, rf, trainerDocs);
+    const courseOk = traineeMatchesCourseFilter(row, rf.course, programByMulti);
+    return yearOk && genderOk && districtOk && programOk && partnerOk && trainerOk && courseOk;
+}
+
 function filterTraineesForReport(allTrainees, rf, programByMulti, pdfProgramPartnerMap, partnerDocs, trainerDocs) {
-    return allTrainees.filter((t) => {
-        const traineeProgramId = getProgramIdFromTrainee(t);
-        const prog = programByMulti[traineeProgramId];
-        const programStartYear = prog ? getYearFromProgramStart(prog) : '';
-        const yearOk = rf.year === 'all'
-            || getCreatedYear(t) === rf.year
-            || (programStartYear !== '' && programStartYear === rf.year);
+    const people = allTrainees.filter((t) => {
+        const programIds = getProgramIdsFromTrainee(t);
+        const createdYear = getCreatedYear(t);
+        const progYears = programIds.map((pid) => getYearFromProgramStart(programByMulti[pid])).filter(Boolean);
+        const yearOk = rf.year === 'all' || createdYear === rf.year || progYears.includes(rf.year);
         const genderOk = rf.gender === 'all' || normalizeGender(t.gender) === rf.gender;
         const districtOk = districtMatchesFilter(t, rf);
-        const programOk = rf.programId === 'all'
-            || traineeProgramId === rf.programId
-            || (prog && (prog.$id === rf.programId || String(prog.documentId || '') === rf.programId));
-        const partnerOk = programMatchesPartnerFilter(prog, rf.partnerId, partnerDocs, pdfProgramPartnerMap);
-        const trainerOk = trainerMatchesFilter(prog, rf, trainerDocs);
+        const programOk = rf.programId === 'all' || traineeMatchesProgramFilter(t, rf.programId, programByMulti);
+        const partnerOk = rf.partnerId === 'all' || programIds.some((pid) => programMatchesPartnerFilter(programByMulti[pid], rf.partnerId, partnerDocs, pdfProgramPartnerMap));
+        const trainerOk = rf.trainerId === 'all' || programIds.some((pid) => trainerMatchesFilter(programByMulti[pid], rf, trainerDocs));
         const courseOk = traineeMatchesCourseFilter(t, rf.course, programByMulti);
         return yearOk && genderOk && districtOk && programOk && partnerOk && trainerOk && courseOk;
     });
+    return expandTraineesByEnrollment(people).filter((row) => enrollmentRowMatchesReportFilters(row, rf, programByMulti, pdfProgramPartnerMap, partnerDocs, trainerDocs));
 }
 /** If the user’s filters exclude every loaded trainee, widen filters so the PDF still lists people (with toast). */
 function resolveTraineesForPdf(allTrainees, userFilters, programByMulti, pdfProgramPartnerMap, partnerDocs, trainerDocs) {
@@ -446,7 +468,7 @@ export default function ReportsPage() {
                 fetchReportCollectionOrEmpty(COLLECTIONS.PROGRAM_PARTNERS, 'program_partners'),
             ]);
             setPrograms(programDocs);
-            const enrollmentByTrainee = buildEnrollmentByTrainee(enrollmentDocs);
+            const enrollmentByTrainee = buildEnrollmentListsByTrainee(enrollmentDocs);
             setTraineesSnapshot(traineeDocs.map((t) => mergeTraineeWithEnrollment(enrollmentByTrainee, t)));
             setTrainers(trainerDocs);
             setPartners(partnerDocs);
@@ -620,7 +642,7 @@ export default function ReportsPage() {
                 COLLECTIONS.PARTNERS ? fetchAllReportDocuments(COLLECTIONS.PARTNERS) : Promise.resolve([]),
                 fetchReportCollectionOrEmpty(COLLECTIONS.PROGRAM_PARTNERS, 'program_partners'),
             ]);
-            const enrollmentByTrainee = buildEnrollmentByTrainee(enrollmentDocs);
+            const enrollmentByTrainee = buildEnrollmentListsByTrainee(enrollmentDocs);
             const allTrainees = rawTrainees.map((t) => mergeTraineeWithEnrollment(enrollmentByTrainee, t));
             const pdfProgramPartnerMap = buildProgramPartnerMapFromDocs(ppDocs);
             const programByMulti = buildProgramByAnyId(programDocs);
@@ -663,7 +685,7 @@ export default function ReportsPage() {
             const cw = pdfContentWidthMm(doc);
             const filterSrc = { programs: programDocs, partners: partnerDocs, trainers: trainerDocs };
             let yNext = addStyledFilterTable(doc, startY, filterSrc, rf);
-            const levelByCategory = buildLevelByCourseCategory(trainees, programByMulti, getProgramIdFromTrainee);
+            const levelByCategory = buildLevelByCourseCategory(trainees, programByMulti, { alreadyExpanded: true });
             const base = getPdfTableBase(doc);
             if (levelByCategory.grandTotal > 0) {
                 doc.setFont('helvetica', 'bold');
@@ -700,7 +722,7 @@ export default function ReportsPage() {
                         'Technician (share of row)',
                         'Trainer (share of row)',
                         'Total',
-                        '% of all trainees',
+                        '% of all enrollments',
                     ]],
                     body: levelMatrixRows,
                     headStyles: { ...base.headStyles, fontSize: 8 },
@@ -723,14 +745,17 @@ export default function ReportsPage() {
                     tableBase: base,
                     trainees,
                     programById: programByMulti,
+                    enrollmentRowsAlreadyExpanded: true,
                 });
             }
             doc.setFont('helvetica', 'bold');
             doc.setFontSize(11);
             doc.setTextColor(51, 65, 85);
-            const traineeSectionTitle = trainees.length === 1
-                ? 'Registered trainees: 1 person'
-                : `Registered trainees: ${trainees.length} people`;
+            const uniqueTraineeCount = new Set(trainees.map((t) => t.$id).filter(Boolean)).size;
+            const enrollmentRowCount = trainees.length;
+            const traineeSectionTitle = uniqueTraineeCount === 1
+                ? `Registered trainees: 1 person (${enrollmentRowCount} course enrollment)`
+                : `Registered trainees: ${uniqueTraineeCount} people (${enrollmentRowCount} course enrollments)`;
             doc.text(traineeSectionTitle, REPORT_MARGIN_X, yNext);
             yNext += 7;
             const headStylesData = {

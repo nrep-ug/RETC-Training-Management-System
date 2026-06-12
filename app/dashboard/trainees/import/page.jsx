@@ -2,6 +2,9 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
+import { fetchAllDocuments, fetchCollectionOrEmpty } from '@/lib/fetch-all-documents';
+import { upsertTraineeEnrollment } from '@/lib/trainee-enrollment-sync';
+import { normalizeTraineeLevelKey } from '@/lib/trainee-levels';
 import { TraineeStatus } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -97,6 +100,7 @@ export default function ImportTraineesPage() {
                 skipped: 0,
                 errors: [],
             };
+            const enrollmentRows = await fetchCollectionOrEmpty(databases, DB_ID, COLLECTIONS.ENROLLMENTS);
             // Process each row
             for (let i = 0; i < rows.length; i++) {
                 const row = rows[i];
@@ -114,7 +118,24 @@ export default function ImportTraineesPage() {
                     // Check if trainee already exists
                     const existing = await databases.listDocuments(DB_ID, COLLECTIONS.TRAINEES, [`["email", "==", "${row.email}"]`]);
                     if (existing.documents.length > 0) {
-                        importResult.skipped++;
+                        const existingTrainee = existing.documents[0];
+                        if (row.program_id && COLLECTIONS.ENROLLMENTS) {
+                            const importLevel = normalizeTraineeLevelKey(row.trainee_level || row.level || '');
+                            await upsertTraineeEnrollment(
+                                databases,
+                                DB_ID,
+                                COLLECTIONS.ENROLLMENTS,
+                                existingTrainee.$id,
+                                row.program_id,
+                                TraineeStatus.ENROLLED,
+                                importLevel,
+                                enrollmentRows,
+                            );
+                            importResult.success++;
+                        }
+                        else {
+                            importResult.skipped++;
+                        }
                         continue;
                     }
                     // Create trainee
@@ -151,8 +172,12 @@ export default function ImportTraineesPage() {
                         traineePayload.district = row.district;
                     if (row.qualification)
                         traineePayload.qualification = row.qualification;
-                    if (row.program_id)
-                        traineePayload.program_id = row.program_id;
+                    const programIdForRow = row.program_id ? String(row.program_id).trim() : '';
+                    const importLevel = normalizeTraineeLevelKey(row.trainee_level || row.level || '');
+                    if (programIdForRow)
+                        traineePayload.program_id = programIdForRow;
+                    if (importLevel)
+                        traineePayload.trainee_level = importLevel;
                     if (row.next_of_kin_name)
                         traineePayload.next_of_kin_name = row.next_of_kin_name;
                     if (row.next_of_kin_phone) {
@@ -173,9 +198,21 @@ export default function ImportTraineesPage() {
                         }
                         traineePayload.consent_date = consentDate.toISOString();
                     }
-                    await databases.createDocument(DB_ID, COLLECTIONS.TRAINEES, 'unique()', {
+                    const created = await databases.createDocument(DB_ID, COLLECTIONS.TRAINEES, 'unique()', {
                         ...traineePayload,
                     });
+                    if (programIdForRow && COLLECTIONS.ENROLLMENTS) {
+                        await upsertTraineeEnrollment(
+                            databases,
+                            DB_ID,
+                            COLLECTIONS.ENROLLMENTS,
+                            created.$id,
+                            programIdForRow,
+                            TraineeStatus.ENROLLED,
+                            importLevel,
+                            enrollmentRows,
+                        );
+                    }
                     importResult.success++;
                 }
                 catch (error) {
@@ -308,7 +345,7 @@ export default function ImportTraineesPage() {
               <li>Phone must be a string and no longer than 12 characters</li>
               <li>Next of kin phone must be no longer than 12 characters</li>
               <li>Gender values must be Male or Female</li>
-              <li>Duplicate emails will be skipped</li>
+              <li>Existing emails with a program_id are enrolled in that course (no duplicate person)</li>
               <li>All trainees will be created with &apos;Currently Enrolled&apos; status</li>
             </ul>
           </div>

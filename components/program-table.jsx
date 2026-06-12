@@ -11,6 +11,9 @@ import { RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
 import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 function getTrainingPartnerDisplay(program) {
+    const names = Array.isArray(program.training_partner_names) ? program.training_partner_names.filter(Boolean) : [];
+    if (names.length > 0)
+        return names.join(', ');
     const raw = program.training_partner
         || program.trainingPartner
         || program['training-partners']

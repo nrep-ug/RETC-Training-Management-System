@@ -473,8 +473,9 @@ export default function ProgramsPage() {
                 return prev;
             const prevIds = (Array.isArray(prev.partner_ids) ? prev.partner_ids : []).join(',');
             const nextIds = (Array.isArray(mapped.partner_ids) ? mapped.partner_ids : []).join(',');
-            if (prevIds === nextIds
-                && String(prev.training_partner_id || '') === String(mapped.training_partner_id || ''))
+            const prevTraining = (Array.isArray(prev.training_partner_ids) ? prev.training_partner_ids : []).join(',');
+            const nextTraining = (Array.isArray(mapped.training_partner_ids) ? mapped.training_partner_ids : []).join(',');
+            if (prevIds === nextIds && prevTraining === nextTraining)
                 return prev;
             return { ...prev, ...mapped };
         });
@@ -518,11 +519,19 @@ export default function ProgramsPage() {
                 throw new Error('Courses collection is not configured. Check your Appwrite environment variables.');
             }
             partnerFetchSeqRef.current += 1;
-            const selectedPartner = partners.find((p) => p.$id === data.training_partner_id
-                || p.documentId === data.training_partner_id);
-            const selectedPartnerName = selectedPartner?.name || String(data.training_partner || '').trim();
+            const trainingIds = Array.isArray(data.training_partner_ids) && data.training_partner_ids.length > 0
+                ? data.training_partner_ids
+                : (data.training_partner_id ? [data.training_partner_id] : []);
+            const trainingNames = trainingIds
+                .map((id) => partners.find((p) => p.$id === id || p.documentId === id)?.name)
+                .filter(Boolean);
+            const selectedPartnerName = trainingNames.length > 0
+                ? trainingNames.join(', ')
+                : String(data.training_partner || '').trim();
             const payloadData = {
                 ...data,
+                training_partner_ids: trainingIds,
+                training_partner_id: trainingIds[0] || '',
                 training_partner: selectedPartnerName,
                 'training-partners': selectedPartnerName,
                 training_partners: selectedPartnerName,
@@ -532,7 +541,7 @@ export default function ProgramsPage() {
                 const updated = await updateProgramWithFallback(selectedProgram.$id, payloadData);
                 await syncProgramPartners(selectedProgram.$id, data);
                 const nextPrograms = programs.map((p) => (p.$id === selectedProgram.$id
-                    ? normalizeProgramDoc({ ...updated, ...data, training_partner: selectedPartner?.name || '' })
+                    ? normalizeProgramDoc({ ...updated, ...data, training_partner: selectedPartnerName })
                     : p));
                 setPrograms(nextPrograms);
                 patchProgramPartnerMapForProgram(selectedProgram.$id, data, nextPrograms);
@@ -544,7 +553,7 @@ export default function ProgramsPage() {
                 // Create new
                 const response = await createProgramWithFallback(payloadData);
                 await syncProgramPartners(response.$id, data);
-                const nextPrograms = [...programs, normalizeProgramDoc({ ...response, ...data, training_partner: selectedPartner?.name || '' })];
+                const nextPrograms = [...programs, normalizeProgramDoc({ ...response, ...data, training_partner: selectedPartnerName })];
                 setPrograms(nextPrograms);
                 patchProgramPartnerMapForProgram(response.$id, data, nextPrograms);
                 if (COLLECTIONS.PROGRAM_PARTNERS) {
