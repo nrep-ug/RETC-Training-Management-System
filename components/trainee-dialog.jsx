@@ -1,14 +1,19 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { TraineeStatus, TRAINEE_STATUS_HINT } from '@/lib/types';
-import { getTraineeLevelFormSelectOptions, getTraineeLevelFromDoc } from '@/lib/trainee-levels';
+import { TraineeStatus, TRAINEE_STATUS_HINT, getTraineeStatusLabel } from '@/lib/types';
+import {
+    resolveEnrollmentLevelForProgram,
+    resolveEnrollmentStatusForProgram,
+    resolveTraineeDialogProgramId,
+} from '@/lib/trainee-enrollment';
+import { getTraineeLevelFormSelectOptions, getTraineeLevelLabel } from '@/lib/trainee-levels';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, } from '@/components/ui/select';
 import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
-export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = [], isProgramsLoading = false, }) {
+export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = [], isProgramsLoading = false, programMap = {}, }) {
     const [isLoading, setIsLoading] = useState(false);
     const [submitError, setSubmitError] = useState('');
     const [currentStep, setCurrentStep] = useState(1);
@@ -52,14 +57,15 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
                 : rawGender === 'f' || rawGender === 'female'
                     ? 'Female'
                     : '';
+            const dialogProgramId = resolveTraineeDialogProgramId(trainee, trainee._dialogProgramId);
             setFormData({
                 email: trainee.email,
                 name: trainee.name,
                 phone: trainee.phone || '',
                 gender: normalizedGender,
-                trainee_level: getTraineeLevelFromDoc(trainee),
-                program_id: trainee.program_id || '',
-                status: trainee.status || TraineeStatus.ENROLLED,
+                trainee_level: resolveEnrollmentLevelForProgram(trainee, dialogProgramId),
+                program_id: dialogProgramId,
+                status: resolveEnrollmentStatusForProgram(trainee, dialogProgramId) || TraineeStatus.ENROLLED,
                 certification_status: String(trainee.certification_status || trainee.certificationStatus || 'pending')
                     .trim()
                     .toLowerCase()
@@ -152,7 +158,14 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
         }
     };
     const handleChange = (field, value) => {
-        setFormData(prev => ({ ...prev, [field]: value }));
+        setFormData((prev) => {
+            const next = { ...prev, [field]: value };
+            if (field === 'program_id' && trainee) {
+                next.status = resolveEnrollmentStatusForProgram(trainee, value) || TraineeStatus.ENROLLED;
+                next.trainee_level = resolveEnrollmentLevelForProgram(trainee, value) || '';
+            }
+            return next;
+        });
     };
     const handleNext = () => {
         const validationError = validateStep(currentStep);
@@ -235,8 +248,14 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
 
           {currentStep === 2 && (<>
           <div className="space-y-2">
-            <Label htmlFor="trainee_level">Participant level *</Label>
-            <p className="text-xs leading-snug text-slate-500">Beginner: new to the field. Technician: practicing or refresher. Trainer: delivers or supports training.</p>
+            <Label htmlFor="trainee_level">
+              {trainee && (trainee.enrollments?.length || 0) > 1 ? 'Participant level for selected course *' : 'Participant level *'}
+            </Label>
+            <p className="text-xs leading-snug text-slate-500">
+              {trainee && (trainee.enrollments?.length || 0) > 1
+                ? 'Applies only to the course selected below — each course can have its own level.'
+                : 'Beginner: new to the field. Technician: practicing or refresher. Trainer: delivers or supports training.'}
+            </p>
             <Select value={formData.trainee_level || 'none'} onValueChange={(value) => handleChange('trainee_level', value === 'none' ? '' : value)}>
               <SelectTrigger disabled={isLoading}>
                 <SelectValue placeholder="Select level" />
@@ -262,9 +281,34 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
             </Select>
           </div>
 
+          {!trainee && (
+            <p className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+              If this person already exists (same email), they will be enrolled in the selected course — a duplicate profile will not be created.
+            </p>
+          )}
+          {trainee && Array.isArray(trainee.enrollments) && trainee.enrollments.length > 1 && (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+              This person is on multiple courses. Profile details (name, contact) are shared.
+              <span className="font-semibold"> Status and participant level</span> are saved per selected course below.
+            </p>
+          )}
+          {trainee && Array.isArray(trainee.enrollments) && trainee.enrollments.length > 0 && (
+            <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-xs font-medium text-slate-600">Course enrollments</p>
+              <ul className="space-y-1 text-sm text-slate-700">
+                {trainee.enrollments.map((e) => (
+                  <li key={`${e.programId}-${e.enrollmentId}`}>
+                    {programMap[e.programId] || programs.find((p) => p.$id === e.programId)?.title || e.programId}
+                    {e.traineeLevel ? ` — ${getTraineeLevelLabel(e.traineeLevel)}` : ''}
+                    {e.status ? ` — ${getTraineeStatusLabel(e.status)}` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="space-y-2">
-            <Label htmlFor="program_id">{COURSE_MODULE_LABELS.enrollmentLabel} *</Label>
-            <Select value={formData.program_id} onValueChange={(value) => handleChange('program_id', value)}>
+            <Label htmlFor="program_id">{trainee ? `Course for status & level` : `${COURSE_MODULE_LABELS.enrollmentLabel} *`}</Label>
+            <Select value={formData.program_id || undefined} onValueChange={(value) => handleChange('program_id', value)}>
               <SelectTrigger disabled={isLoading || isProgramsLoading || programs.length === 0}>
                 <SelectValue placeholder={isProgramsLoading
                     ? COURSE_MODULE_LABELS.loading
@@ -287,8 +331,12 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="status">Status *</Label>
-            <p className="text-xs leading-snug text-slate-500">{TRAINEE_STATUS_HINT}</p>
+            <Label htmlFor="status">{trainee && (trainee.enrollments?.length || 0) > 1 ? 'Status for selected course *' : 'Status *'}</Label>
+            <p className="text-xs leading-snug text-slate-500">
+              {trainee && (trainee.enrollments?.length || 0) > 1
+                ? 'Applies only to the course selected above — other courses keep their own status.'
+                : TRAINEE_STATUS_HINT}
+            </p>
             <Select value={formData.status} onValueChange={(value) => handleChange('status', value)}>
               <SelectTrigger disabled={isLoading}>
                 <SelectValue />

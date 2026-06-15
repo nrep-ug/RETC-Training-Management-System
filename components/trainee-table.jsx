@@ -6,9 +6,10 @@ import { Eye, Pencil, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { useClientPagination } from '@/hooks/use-client-pagination';
-import { getTraineeLevelFromDoc } from '@/lib/trainee-levels';
+import { getTraineeLevelLabel } from '@/lib/trainee-levels';
 import { TraineeLevelBadge } from '@/components/trainee-level-badge';
 import { getTraineeStatusLabel, normalizeTraineeStatus } from '@/lib/types';
+import { getTraineeLevelForProgram, getTraineeStatusForProgram } from '@/lib/trainee-enrollment';
 import { TablePaginationFooter } from '@/components/table-pagination-footer';
 import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
 import { RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
@@ -70,10 +71,22 @@ function DetailField({ label, value, className = '' }) {
     );
 }
 
-function TraineeDetailView({ trainee, programMap, courseMap }) {
-    const levelKey = getTraineeLevelFromDoc(trainee);
-    const courseName = trainee.program_name || programMap[trainee.program_id] || '—';
-    const categoryLabel = courseMap[trainee.program_id] || trainee.course_label || '—';
+function formatCourseList(trainee, programMap) {
+    if (trainee.program_name)
+        return trainee.program_name;
+    const ids = Array.isArray(trainee.program_ids) ? trainee.program_ids : [trainee.program_id].filter(Boolean);
+    const names = ids.map((id) => programMap[id] || id).filter(Boolean);
+    return names.length > 0 ? names.join(', ') : '—';
+}
+
+function TraineeDetailView({ trainee, programMap, courseMap, programFilterId = 'all' }) {
+    const levelKey = getTraineeLevelForProgram(trainee, programFilterId);
+    const displayStatus = getTraineeStatusForProgram(trainee, programFilterId);
+    const courseName = formatCourseList(trainee, programMap);
+    const categoryLabel = (Array.isArray(trainee.program_ids) ? trainee.program_ids : [trainee.program_id])
+        .map((id) => courseMap[id])
+        .filter(Boolean)
+        .join(', ') || trainee.course_label || '—';
     const consentGiven = Boolean(trainee.consent_given);
     return (
         <div className="space-y-5 bg-gradient-to-b from-white via-white to-[#f7faf8] px-6 py-5">
@@ -90,10 +103,10 @@ function TraineeDetailView({ trainee, programMap, courseMap }) {
                         role="status"
                         className={cn(
                             'inline-flex shrink-0 items-center rounded-full px-3 py-1 text-xs font-semibold capitalize',
-                            getStatusBadgeStyles(trainee.status),
+                            getStatusBadgeStyles(displayStatus),
                         )}
                     >
-                        {getTraineeStatusLabel(trainee.status)}
+                        {getTraineeStatusLabel(displayStatus)}
                     </span>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -122,6 +135,19 @@ function TraineeDetailView({ trainee, programMap, courseMap }) {
                             value={courseName}
                             className="sm:col-span-2"
                         />
+                        {Array.isArray(trainee.enrollments) && trainee.enrollments.length > 1 && (
+                            <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Course history</p>
+                                <ul className="mt-2 space-y-1 text-sm text-slate-700">
+                                    {trainee.enrollments.map((e) => (
+                                        <li key={`${e.programId}-${e.enrollmentId}`}>
+                                            {programMap[e.programId] || e.programId}
+                                            {e.status ? ` — ${getTraineeStatusLabel(e.status)}` : ''}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
                         <DetailField label={COURSE_MODULE_LABELS.categoryFieldLabel} value={categoryLabel} />
                         <DetailField label={RETC_FACILITATOR_LABELS.traineesTrainerLabel} value={trainee.trainer_name} />
                         <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
@@ -165,6 +191,7 @@ export function TraineeTable({
     onEdit,
     onDelete,
     isAdmin,
+    programFilterId = 'all',
     programMap = {},
     courseMap = {},
     paginationResetKey = '',
@@ -216,7 +243,9 @@ export function TraineeTable({
                     </thead>
                     <tbody className="divide-y divide-[#047857]/10">
                         {pagedItems.map((trainee) => {
-                            const courseName = trainee.program_name || programMap[trainee.program_id] || '—';
+                            const courseName = formatCourseList(trainee, programMap);
+                            const displayStatus = getTraineeStatusForProgram(trainee, programFilterId);
+                            const displayLevel = getTraineeLevelForProgram(trainee, programFilterId);
                             return (
                                 <tr
                                     key={trainee.$id}
@@ -235,17 +264,17 @@ export function TraineeTable({
                                         {courseName}
                                     </td>
                                     <td className="px-3 py-3 text-sm sm:px-6 sm:py-4">
-                                        <TraineeLevelBadge trainee={trainee} />
+                                        <TraineeLevelBadge levelKey={displayLevel} label={getTraineeLevelLabel(displayLevel)} />
                                     </td>
                                     <td className="px-3 py-3 text-sm sm:px-6 sm:py-4">
                                         <span
                                             role="status"
                                             className={cn(
                                                 'inline-flex max-w-full items-center rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize',
-                                                getStatusBadgeStyles(trainee.status),
+                                                getStatusBadgeStyles(displayStatus),
                                             )}
                                         >
-                                            {getTraineeStatusLabel(trainee.status)}
+                                            {getTraineeStatusLabel(displayStatus)}
                                         </span>
                                     </td>
                                     <td className="space-x-2 px-3 py-3 text-sm sm:px-6 sm:py-4">
@@ -266,8 +295,8 @@ export function TraineeTable({
                                                     size="sm"
                                                     variant="outline"
                                                     className="text-red-600 hover:text-red-700"
-                                                    onClick={() => onDelete?.(trainee.$id)}
-                                                    title="Delete"
+                                                    onClick={() => onDelete?.(trainee)}
+                                                    title="Remove or delete"
                                                 >
                                                     <Trash2 className="h-4 w-4" />
                                                 </Button>
@@ -303,7 +332,7 @@ export function TraineeTable({
                         <DialogTitle className="text-xl font-bold text-white">Trainee profile</DialogTitle>
                     </DialogHeader>
                     {viewTrainee && (
-                        <TraineeDetailView trainee={viewTrainee} programMap={programMap} courseMap={courseMap} />
+                        <TraineeDetailView trainee={viewTrainee} programMap={programMap} courseMap={courseMap} programFilterId={programFilterId} />
                     )}
                 </DialogContent>
             </Dialog>

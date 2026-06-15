@@ -1,12 +1,16 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth-provider';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
-import { fetchAllDocuments } from '@/lib/fetch-all-documents';
+import {
+    collectionAppearsNonEmpty,
+    fetchAllDocuments,
+    fetchCollectionOrEmpty,
+} from '@/lib/fetch-all-documents';
 import { TraineeStatus, TRAINEE_STATUS_HINT } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Plus, Upload } from 'lucide-react';
+import { Plus, RefreshCcw, Upload } from 'lucide-react';
 import Link from 'next/link';
 import { TraineeDialog } from '@/components/trainee-dialog';
 import { TraineeTable } from '@/components/trainee-table';
@@ -19,24 +23,23 @@ import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
 import { getCourseFilterSelectOptions, getCourseKeyFromProgram, getTraineeCourseLabel, traineeMatchesCourseFilter, } from '@/lib/renewable-energy-courses';
 import { assertValidTraineeLevel, enrichTraineeWithLevel, getTraineeLevelFilterSelectOptions, getTraineeLevelFromDoc, getTraineeLevelLabel, traineeMatchesLevelFilter, } from '@/lib/trainee-levels';
 import { buildTrainerNameById, getTrainerIdFromProgram, resolveTrainerDisplayName, } from '@/lib/program-trainer';
-function getEnrollmentTraineeId(doc) {
-    const value = doc.trainee_id || doc.traineeId || doc.trainee || '';
-    if (typeof value === 'string')
-        return value;
-    if (value && typeof value === 'object') {
-        return value.$id || value.documentId || value.id || '';
-    }
-    return '';
-}
-function getEnrollmentProgramId(doc) {
-    const value = doc.program_id || doc.programId || doc.program || '';
-    if (typeof value === 'string')
-        return value;
-    if (value && typeof value === 'object') {
-        return value.$id || value.documentId || value.id || '';
-    }
-    return '';
-}
+import {
+    buildEnrollmentsByTrainee,
+    getEnrollmentProgramId,
+    getEnrollmentTraineeId,
+    getProgramIdsFromTrainee,
+    getTraineeLevelForProgram,
+    getTraineeStatusForProgram,
+    mergeTraineeWithEnrollment,
+    pickPrimaryProgramId,
+    resolveTraineeDialogProgramId,
+} from '@/lib/trainee-enrollment';
+import {
+    deleteEnrollmentForTraineeProgram,
+    deleteEnrollmentsForTrainee,
+    traineeAlreadyOnProgram,
+    upsertTraineeEnrollment,
+} from '@/lib/trainee-enrollment-sync';
 function documentStableId(doc) {
     if (!doc)
         return '';
@@ -127,10 +130,10 @@ function sanitizeTraineePayload(data) {
     return cleaned;
 }
 function buildTraineePayloadCandidates(payload, programId) {
-    const base = {
-        ...payload,
-        program_id: programId,
-    };
+    const base = { ...payload };
+    if (programId) {
+        base.program_id = programId;
+    }
     const levelKey = payload.trainee_level ? assertValidTraineeLevel(payload.trainee_level) : '';
     const strictStringConsent = {
         ...base,
@@ -250,7 +253,8 @@ export default function TraineesPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [showDialog, setShowDialog] = useState(false);
     const [selectedTrainee, setSelectedTrainee] = useState(null);
-    const [pendingDeleteId, setPendingDeleteId] = useState('');
+    const [pendingDelete, setPendingDelete] = useState(null);
+    const [enrollmentRows, setEnrollmentRows] = useState([]);
     const [filters, setFilters] = useState({
         query: '',
         status: 'all',
@@ -260,6 +264,7 @@ export default function TraineesPage() {
         programId: 'all',
         district: '',
     });
+    const fetchSeqRef = useRef(0);
     useEffect(() => {
         fetchTrainees();
     }, []);
@@ -301,53 +306,62 @@ export default function TraineesPage() {
             return [];
         }
     };
-    const fetchEnrollments = async () => {
-        if (!databases || !DB_ID || !COLLECTIONS.ENROLLMENTS)
-            return [];
-        return await fetchAllDocuments(databases, DB_ID, COLLECTIONS.ENROLLMENTS);
-    };
     const fetchTrainees = async () => {
+        const seq = ++fetchSeqRef.current;
         try {
             setIsLoading(true);
             if (!databases || !DB_ID || !COLLECTIONS.TRAINEES) {
                 throw new Error('Trainees collection is not configured. Check your Appwrite environment variables.');
             }
-            const [traineeDocs, programDocs, enrollmentDocs, trainerDocs] = await Promise.all([
-                fetchAllDocuments(databases, DB_ID, COLLECTIONS.TRAINEES),
-                fetchPrograms(),
-                fetchEnrollments(),
-                fetchTrainers(),
+            const traineeDocs = await fetchAllDocuments(databases, DB_ID, COLLECTIONS.TRAINEES);
+            if (seq !== fetchSeqRef.current)
+                return;
+            if (traineeDocs.length === 0) {
+                const hasTrainees = await collectionAppearsNonEmpty(databases, DB_ID, COLLECTIONS.TRAINEES);
+                if (seq !== fetchSeqRef.current)
+                    return;
+                if (hasTrainees) {
+                    throw new Error('Trainee list did not load completely. Please use Refresh or reload the page.');
+                }
+            }
+            const [programDocs, enrollmentDocs, trainerDocs] = await Promise.all([
+                COLLECTIONS.PROGRAMS
+                    ? fetchAllDocuments(databases, DB_ID, COLLECTIONS.PROGRAMS).catch(() => null)
+                    : Promise.resolve(null),
+                fetchCollectionOrEmpty(databases, DB_ID, COLLECTIONS.ENROLLMENTS),
+                COLLECTIONS.TRAINERS
+                    ? fetchAllDocuments(databases, DB_ID, COLLECTIONS.TRAINERS).catch(() => null)
+                    : Promise.resolve(null),
             ]);
-            setPrograms(programDocs);
-            setTrainers(trainerDocs);
-            const trainerById = buildTrainerNameById(trainerDocs);
-            const enrollmentByTrainee = Object.fromEntries(enrollmentDocs
-                .map((e) => {
-                const traineeId = getEnrollmentTraineeId(e);
-                const programValue = e.program || e.program_id || e.programId || '';
-                return [traineeId, {
-                        program_id: getEnrollmentProgramId(e),
-                        program_name: getProgramLabel(programValue),
-                    }];
-            })
-                .filter(([traineeId]) => !!traineeId));
-            const programByIdSnapshot = Object.fromEntries(programDocs.map((p) => [p.$id, p]));
-            const mappedTrainees = traineeDocs.map((t) => {
-                const programId = enrollmentByTrainee[t.$id]?.program_id
-                    || t.program_id
-                    || t.programId
-                    || (t.program && typeof t.program === 'object' ? (t.program.$id || t.program.documentId || t.program.id || '') : t.program)
-                    || '';
+            if (seq !== fetchSeqRef.current)
+                return;
+            if (programDocs)
+                setPrograms(programDocs);
+            if (trainerDocs)
+                setTrainers(trainerDocs);
+            const trainerById = buildTrainerNameById(trainerDocs || trainers);
+            setEnrollmentRows(enrollmentDocs);
+            const enrollmentListsByTrainee = buildEnrollmentsByTrainee(enrollmentDocs);
+            const programByIdSnapshot = Object.fromEntries((programDocs || programs).map((p) => [p.$id, p]));
+            const resolveProgramTitle = (programId) => {
                 const prog = programByIdSnapshot[programId];
+                return prog?.title || prog?.name || prog?.program_name || '';
+            };
+            const mappedTrainees = traineeDocs.map((t) => {
+                const merged = mergeTraineeWithEnrollment(enrollmentListsByTrainee, t);
+                const programNames = (merged.program_ids || [])
+                    .map((pid) => resolveProgramTitle(pid))
+                    .filter(Boolean);
+                const prog = programByIdSnapshot[merged.program_id];
                 const trainerId = prog ? getTrainerIdFromProgram(prog) : '';
                 return {
-                    ...t,
+                    ...merged,
                     trainee_level: getTraineeLevelFromDoc(t),
                     trainee_level_label: getTraineeLevelLabel(getTraineeLevelFromDoc(t)),
-                    program_id: programId,
-                    program_name: enrollmentByTrainee[t.$id]?.program_name
-                        || (t.program && typeof t.program === 'object' ? getProgramLabel(t.program) : '')
-                        || '',
+                    program_name: programNames.length > 0
+                        ? programNames.join(', ')
+                        : (t.program && typeof t.program === 'object' ? getProgramLabel(t.program) : ''),
+                    program_names: programNames,
                     trainer_id: trainerId,
                     trainer_name: prog ? resolveTrainerDisplayName(prog, trainerById) : '',
                 };
@@ -363,7 +377,8 @@ export default function TraineesPage() {
             });
         }
         finally {
-            setIsLoading(false);
+            if (seq === fetchSeqRef.current)
+                setIsLoading(false);
         }
     };
     const handleAddTrainee = () => {
@@ -371,7 +386,11 @@ export default function TraineesPage() {
         setShowDialog(true);
     };
     const handleEditTrainee = (trainee) => {
-        setSelectedTrainee(trainee);
+        const ids = getProgramIdsFromTrainee(trainee);
+        const dialogProgramId = filters.programId !== 'all' && ids.includes(filters.programId)
+            ? filters.programId
+            : resolveTraineeDialogProgramId(trainee);
+        setSelectedTrainee({ ...trainee, _dialogProgramId: dialogProgramId });
         setShowDialog(true);
     };
     useEffect(() => {
@@ -382,18 +401,38 @@ export default function TraineesPage() {
             setTrainers(trainerDocs);
         });
     }, [showDialog]);
-    const handleDeleteTrainee = async (id) => {
-        setPendingDeleteId(id);
+    const resolveEnrollmentRemovalProgramId = (trainee, programFilterId) => {
+        const programIds = getProgramIdsFromTrainee(trainee);
+        const filterId = String(programFilterId || '').trim();
+        if (filterId && filterId !== 'all' && programIds.includes(filterId))
+            return filterId;
+        if (programIds.length > 1) {
+            const primary = String(trainee.program_id || '').trim();
+            if (primary && programIds.includes(primary))
+                return primary;
+        }
+        if (programIds.length === 1)
+            return programIds[0];
+        return '';
     };
-    const confirmDeleteTrainee = async () => {
-        if (!pendingDeleteId)
+    const handleDeleteTrainee = (trainee) => {
+        setPendingDelete({ trainee });
+    };
+    const confirmDeleteTraineeEntirely = async () => {
+        const trainee = pendingDelete?.trainee;
+        if (!trainee)
             return;
+        const traineeId = documentStableId(trainee);
         try {
-            await databases.deleteDocument(DB_ID, COLLECTIONS.TRAINEES, pendingDeleteId);
-            setTrainees(trainees.filter(t => t.$id !== pendingDeleteId));
+            if (COLLECTIONS.ENROLLMENTS) {
+                await deleteEnrollmentsForTrainee(databases, DB_ID, COLLECTIONS.ENROLLMENTS, traineeId, enrollmentRows);
+            }
+            await databases.deleteDocument(DB_ID, COLLECTIONS.TRAINEES, traineeId);
+            setTrainees(trainees.filter((t) => t.$id !== traineeId));
+            setEnrollmentRows((rows) => rows.filter((row) => getEnrollmentTraineeId(row) !== traineeId));
             toast({
                 title: 'Trainee deleted',
-                description: 'The trainee record was removed successfully.',
+                description: 'The trainee record and all course enrollments were removed.',
             });
         }
         catch (error) {
@@ -405,7 +444,71 @@ export default function TraineesPage() {
             });
         }
         finally {
-            setPendingDeleteId('');
+            setPendingDelete(null);
+        }
+    };
+    const confirmRemoveFromCourse = async () => {
+        const trainee = pendingDelete?.trainee;
+        if (!trainee)
+            return;
+        const traineeId = documentStableId(trainee);
+        const programId = resolveEnrollmentRemovalProgramId(trainee, filters.programId);
+        if (!programId || !COLLECTIONS.ENROLLMENTS) {
+            await confirmDeleteTraineeEntirely();
+            return;
+        }
+        const courseTitle = programs.find((p) => p.$id === programId)?.title
+            || programs.find((p) => p.$id === programId)?.name
+            || programId;
+        try {
+            await deleteEnrollmentForTraineeProgram(
+                databases,
+                DB_ID,
+                COLLECTIONS.ENROLLMENTS,
+                traineeId,
+                programId,
+                enrollmentRows,
+            );
+            const remainingIds = getProgramIdsFromTrainee(trainee).filter((id) => id !== programId);
+            if (remainingIds.length > 0) {
+                const remainingEnrollments = (trainee.enrollments || []).filter((e) => e?.programId && e.programId !== programId);
+                const nextProgramId = pickPrimaryProgramId(
+                    remainingEnrollments.length > 0
+                        ? remainingEnrollments
+                        : remainingIds.map((id) => ({ programId: id, status: '' })),
+                    remainingIds[0],
+                );
+                await updateTraineeWithFallback(traineeId, {}, nextProgramId);
+                setEnrollmentRows((rows) => rows.filter((row) => !(
+                    getEnrollmentTraineeId(row) === traineeId
+                    && getEnrollmentProgramId(row) === programId
+                )));
+                await fetchTrainees();
+                toast({
+                    title: 'Removed from course',
+                    description: `${trainee.name} was removed from "${courseTitle}" but remains enrolled in their other course(s).`,
+                });
+            }
+            else {
+                await databases.deleteDocument(DB_ID, COLLECTIONS.TRAINEES, traineeId);
+                setTrainees((list) => list.filter((t) => t.$id !== traineeId));
+                setEnrollmentRows((rows) => rows.filter((row) => getEnrollmentTraineeId(row) !== traineeId));
+                toast({
+                    title: 'Trainee deleted',
+                    description: `That was their only course. The trainee record was removed.`,
+                });
+            }
+        }
+        catch (error) {
+            console.error('Error removing trainee from course:', error);
+            toast({
+                title: 'Remove from course failed',
+                description: error instanceof Error ? error.message : 'Could not update enrollments.',
+                variant: 'destructive',
+            });
+        }
+        finally {
+            setPendingDelete(null);
         }
     };
     const trainerById = useMemo(() => buildTrainerNameById(trainers), [trainers]);
@@ -420,14 +523,41 @@ export default function TraineesPage() {
             if (!String(payload.qualification || '').trim()) {
                 throw new Error('Qualification is required.');
             }
-            const { program_id, ...traineePayload } = payload;
+            const { program_id, status: enrollmentStatus, trainee_level: enrollmentLevel, ...traineePayload } = payload;
             if (!program_id) {
                 throw new Error(`Please select a ${COURSE_MODULE_LABELS.moduleSingular} for this trainee.`);
             }
+            const useEnrollments = Boolean(COLLECTIONS.ENROLLMENTS);
+            const buildDocumentPayload = (person, isEdit) => {
+                const doc = { ...traineePayload };
+                const personProgramIds = person ? getProgramIdsFromTrainee(person) : [];
+                const multiCourse = useEnrollments && personProgramIds.length > 1;
+                const addingSecondCourse = useEnrollments && person && !isEdit && personProgramIds.length > 0
+                    && !personProgramIds.includes(program_id);
+                if (!multiCourse && !addingSecondCourse) {
+                    doc.status = enrollmentStatus || TraineeStatus.ENROLLED;
+                    if (enrollmentLevel)
+                        doc.trainee_level = enrollmentLevel;
+                }
+                let programIdForDocument = program_id;
+                if (isEdit && multiCourse) {
+                    programIdForDocument = pickPrimaryProgramId(
+                        person?.enrollments || [],
+                        String(person?.program_id || personProgramIds[0] || '').trim(),
+                    );
+                }
+                else if (addingSecondCourse) {
+                    programIdForDocument = pickPrimaryProgramId(
+                        person?.enrollments || [],
+                        String(person?.program_id || personProgramIds[0] || '').trim(),
+                    );
+                }
+                return { traineeDocumentPayload: doc, programIdForDocument };
+            };
             const normalizedEmail = String(traineePayload.email || '').trim().toLowerCase();
             const normalizedPhone = String(traineePayload.phone || '').trim();
             const selectedId = documentStableId(selectedTrainee);
-            const duplicate = trainees.find((t) => {
+            const existingPerson = trainees.find((t) => {
                 if (selectedTrainee && documentStableId(t) === selectedId)
                     return false;
                 const sameEmail = normalizedEmail &&
@@ -436,47 +566,57 @@ export default function TraineesPage() {
                     String(t.phone || '').trim() === normalizedPhone;
                 return sameEmail || samePhone;
             });
-            if (duplicate) {
-                const duplicateReason = String(duplicate.email || '').trim().toLowerCase() === normalizedEmail
-                    ? 'email'
-                    : 'phone';
-                throw new Error(`A trainee with this ${duplicateReason} already exists.`);
+            if (!selectedTrainee && existingPerson && traineeAlreadyOnProgram(existingPerson, program_id, enrollmentRows)) {
+                throw new Error(`This participant is already enrolled in the selected ${COURSE_MODULE_LABELS.moduleSingular}.`);
             }
+            const persistEnrollment = async (traineeId) => {
+                if (!useEnrollments || !traineeId)
+                    return;
+                await upsertTraineeEnrollment(
+                    databases,
+                    DB_ID,
+                    COLLECTIONS.ENROLLMENTS,
+                    traineeId,
+                    program_id,
+                    enrollmentStatus || TraineeStatus.ENROLLED,
+                    enrollmentLevel || '',
+                    enrollmentRows,
+                );
+            };
+            let savedTraineeId = '';
+            let wasReturningEnrollment = false;
             if (selectedTrainee) {
-                // Update existing
                 const updateId = String(selectedTrainee.$id || selectedTrainee.documentId || selectedId).trim();
-                const updated = await updateTraineeWithFallback(updateId, traineePayload, program_id);
-                const prog = programById[program_id];
-                const tid = prog ? getTrainerIdFromProgram(prog) : '';
-                setTrainees(trainees.map((t) => (documentStableId(t) === selectedId
-                    ? enrichTraineeWithLevel({
-                        ...t,
-                        ...updated,
-                        program_id,
-                        trainer_id: tid,
-                        trainer_name: prog ? resolveTrainerDisplayName(prog, trainerById) : '',
-                    }, traineePayload.trainee_level)
-                    : t)));
+                savedTraineeId = updateId;
+                const { traineeDocumentPayload, programIdForDocument } = buildDocumentPayload(selectedTrainee, true);
+                await updateTraineeWithFallback(updateId, traineeDocumentPayload, programIdForDocument);
+                await persistEnrollment(updateId);
+            }
+            else if (existingPerson) {
+                wasReturningEnrollment = true;
+                savedTraineeId = documentStableId(existingPerson);
+                const { traineeDocumentPayload, programIdForDocument } = buildDocumentPayload(existingPerson, false);
+                await updateTraineeWithFallback(savedTraineeId, traineeDocumentPayload, programIdForDocument);
+                await persistEnrollment(savedTraineeId);
             }
             else {
-                // Create new
-                const response = await createTraineeWithFallback(traineePayload, program_id);
-                const prog = programById[program_id];
-                const tid = prog ? getTrainerIdFromProgram(prog) : '';
-                setTrainees([...trainees, enrichTraineeWithLevel({
-                    ...response,
-                    program_id,
-                    trainer_id: tid,
-                    trainer_name: prog ? resolveTrainerDisplayName(prog, trainerById) : '',
-                }, traineePayload.trainee_level)]);
+                const { traineeDocumentPayload, programIdForDocument } = buildDocumentPayload(null, false);
+                const response = await createTraineeWithFallback(traineeDocumentPayload, programIdForDocument);
+                savedTraineeId = documentStableId(response);
+                await persistEnrollment(savedTraineeId);
             }
+            await fetchTrainees();
             setShowDialog(false);
             setSelectedTrainee(null);
             toast({
-                title: selectedTrainee ? 'Trainee updated' : 'Trainee added',
-                description: selectedTrainee
-                    ? 'Changes were saved successfully.'
-                    : 'New trainee record created successfully.',
+                title: wasReturningEnrollment
+                    ? 'Enrolled in course'
+                    : (selectedTrainee ? 'Trainee updated' : 'Trainee added'),
+                description: wasReturningEnrollment
+                    ? `Existing participant enrolled in the selected ${COURSE_MODULE_LABELS.moduleSingular}.`
+                    : (selectedTrainee
+                        ? 'Changes were saved successfully.'
+                        : 'New trainee record created successfully.'),
             });
         }
         catch (error) {
@@ -507,12 +647,18 @@ export default function TraineesPage() {
                 || String(t.name || '').toLowerCase().includes(q)
                 || String(t.email || '').toLowerCase().includes(q)
                 || String(t.phone || '').toLowerCase().includes(q);
-            const matchesStatus = filters.status === 'all' || statusBucket(t.status) === statusBucket(filters.status);
+            const rowStatus = getTraineeStatusForProgram(t, filters.programId);
+            const matchesStatus = filters.status === 'all' || statusBucket(rowStatus) === statusBucket(filters.status);
             const matchesGender = filters.gender === 'all' || String(t.gender || '').toLowerCase() === filters.gender;
-            const traineeProgramId = String(t.program_id || '').trim();
-            const matchesProgram = filters.programId === 'all' || traineeProgramId === filters.programId;
-            const matchesCourse = traineeMatchesCourseFilter(t, filters.course, programById);
-            const matchesLevel = traineeMatchesLevelFilter(t, filters.traineeLevel);
+            const traineeProgramIds = Array.isArray(t.program_ids) && t.program_ids.length > 0
+                ? t.program_ids.map((id) => String(id).trim()).filter(Boolean)
+                : [String(t.program_id || '').trim()].filter(Boolean);
+            const matchesProgram = filters.programId === 'all' || traineeProgramIds.includes(filters.programId);
+            const matchesCourse = filters.course === 'all' || filters.course === '' || filters.course == null
+                ? true
+                : traineeProgramIds.some((pid) => traineeMatchesCourseFilter({ program_id: pid }, filters.course, programById));
+            const matchesLevel = filters.traineeLevel === 'all'
+                || getTraineeLevelForProgram(t, filters.programId) === filters.traineeLevel;
             const districtNeedle = filters.district.trim().toLowerCase();
             const matchesDistrict = !districtNeedle || String(t.district || '').toLowerCase().includes(districtNeedle);
             return matchesQuery && matchesStatus && matchesGender && matchesCourse && matchesLevel && matchesProgram && matchesDistrict;
@@ -525,6 +671,10 @@ export default function TraineesPage() {
           <p className="mt-2 text-gray-600">Manage training course participants</p>
         </div>
         <div className="flex flex-wrap gap-2 sm:gap-3">
+          <Button type="button" variant="outline" className="flex-1 sm:flex-none" onClick={() => fetchTrainees()} disabled={isLoading}>
+            <RefreshCcw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`}/>
+            Refresh
+          </Button>
           {isAdmin && (<>
               <Link href="/dashboard/trainees/import" className="min-w-0 flex-1 sm:flex-none">
                 <Button className="w-full sm:w-auto">
@@ -610,28 +760,83 @@ export default function TraineesPage() {
 
       {/* Trainees Table */}
       <Card>
-        <TraineeTable trainees={filteredTrainees} isLoading={isLoading} onEdit={isAdmin ? handleEditTrainee : undefined} onDelete={isAdmin ? handleDeleteTrainee : undefined} isAdmin={isAdmin} programMap={Object.fromEntries(programs.map((p) => [p.$id, p.title || p.name || p.program_name || '']))} courseMap={courseMap} paginationResetKey={JSON.stringify(filters)}/>
+        <TraineeTable trainees={filteredTrainees} isLoading={isLoading} onEdit={isAdmin ? handleEditTrainee : undefined} onDelete={isAdmin ? handleDeleteTrainee : undefined} isAdmin={isAdmin} programFilterId={filters.programId} programMap={Object.fromEntries(programs.map((p) => [p.$id, p.title || p.name || p.program_name || '']))} courseMap={courseMap} paginationResetKey={JSON.stringify(filters)}/>
       </Card>
 
       {/* Add/Edit Dialog */}
-      {isAdmin && (<TraineeDialog open={showDialog} onOpenChange={setShowDialog} trainee={selectedTrainee} onSave={handleSaveTrainee} programs={programs} isProgramsLoading={isProgramsLoading}/>)}
-      <AlertDialog open={!!pendingDeleteId} onOpenChange={(open) => {
+      {isAdmin && (<TraineeDialog open={showDialog} onOpenChange={setShowDialog} trainee={selectedTrainee} onSave={handleSaveTrainee} programs={programs} isProgramsLoading={isProgramsLoading} programMap={Object.fromEntries(programs.map((p) => [p.$id, p.title || p.name || '']))}/>)}
+      <AlertDialog open={!!pendingDelete?.trainee} onOpenChange={(open) => {
             if (!open)
-                setPendingDeleteId('');
+                setPendingDelete(null);
         }}>
         <AlertDialogContent className="border-[#047857]/25">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete trainee?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This action cannot be undone. The trainee record will be permanently removed.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="border-[#ff8829] text-[#b45309] hover:bg-[#fff4eb] hover:text-[#9a3f05]">Cancel</AlertDialogCancel>
-            <AlertDialogAction className="bg-red-600 text-white hover:bg-red-700" onClick={confirmDeleteTrainee}>
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
+          {(() => {
+            const trainee = pendingDelete?.trainee;
+            const programIds = trainee ? getProgramIdsFromTrainee(trainee) : [];
+            const removalProgramId = trainee ? resolveEnrollmentRemovalProgramId(trainee, filters.programId) : '';
+            const multiCourse = programIds.length > 1;
+            const canRemoveFromCourseOnly = Boolean(COLLECTIONS.ENROLLMENTS && multiCourse && removalProgramId);
+            const removalCourseTitle = programs.find((p) => p.$id === removalProgramId)?.title
+                || programs.find((p) => p.$id === removalProgramId)?.name
+                || removalProgramId;
+            if (canRemoveFromCourseOnly) {
+                return (<>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Remove from course or delete person?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      <span className="font-medium text-slate-800">{trainee?.name}</span> is enrolled in multiple courses.
+                      {' '}Remove them from <span className="font-medium text-slate-800">&quot;{removalCourseTitle}&quot;</span> only
+                      {filters.programId !== 'all'
+                        ? ' (matches your course filter)'
+                        : ''}
+                      {' '}and they will stay on their other course(s). Or delete their entire profile and all enrollments.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:flex-wrap">
+                    <AlertDialogCancel className="border-[#ff8829] text-[#b45309] hover:bg-[#fff4eb] hover:text-[#9a3f05]">Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      className="bg-[#047857] text-white hover:bg-[#036349]"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        void confirmRemoveFromCourse();
+                      }}
+                    >
+                      Remove from this course
+                    </AlertDialogAction>
+                    <AlertDialogAction
+                      className="bg-red-600 text-white hover:bg-red-700"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        void confirmDeleteTraineeEntirely();
+                      }}
+                    >
+                      Delete trainee entirely
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </>);
+            }
+            return (<>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete trainee?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will permanently remove <span className="font-medium text-slate-800">{trainee?.name}</span>
+                  {programIds.length > 0 ? ' and their course enrollment(s)' : ''}. This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel className="border-[#ff8829] text-[#b45309] hover:bg-[#fff4eb] hover:text-[#9a3f05]">Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-red-600 text-white hover:bg-red-700"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void confirmDeleteTraineeEntirely();
+                  }}
+                >
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>);
+          })()}
         </AlertDialogContent>
       </AlertDialog>
     </div>);

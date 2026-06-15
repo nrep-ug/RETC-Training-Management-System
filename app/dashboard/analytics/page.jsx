@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Query } from 'appwrite';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
-import { fetchAllDocuments } from '@/lib/fetch-all-documents';
+import { fetchAllDocuments, fetchCollectionOrEmpty } from '@/lib/fetch-all-documents';
 import { AnalyticsFilterFields } from '@/components/analytics-filter-fields';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -22,9 +22,14 @@ import {
     getCourseKeyFromProgram,
     getCourseLabel,
     programMatchesCourseFilter,
-    traineeMatchesCourseFilter,
 } from '@/lib/renewable-energy-courses';
-import { buildEnrollmentByTrainee, mergeTraineeWithEnrollment } from '@/lib/trainee-enrollment';
+import {
+    buildEnrollmentListsByTrainee,
+    expandTraineesByEnrollment,
+    getProgramIdsFromTrainee,
+    mergeTraineeWithEnrollment,
+} from '@/lib/trainee-enrollment';
+import { enrollmentRowMatchesScope } from '@/lib/enrollment-scope';
 import { isTraineeStatusEnrolled, isTraineeStatusInProgress, normalizeTraineeStatus } from '@/lib/types';
 import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
 import { RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
@@ -212,20 +217,12 @@ export default function AnalyticsPage() {
             const [traineeDocs, programDocs, trainerDocs, partnerDocs, programPartnerDocs, enrollmentDocs] = await Promise.all([
                 fetchAllDocuments(databases, DB_ID, COLLECTIONS.TRAINEES),
                 fetchAllDocuments(databases, DB_ID, COLLECTIONS.PROGRAMS),
-                COLLECTIONS.TRAINERS
-                    ? fetchAllDocuments(databases, DB_ID, COLLECTIONS.TRAINERS)
-                    : Promise.resolve([]),
-                COLLECTIONS.PARTNERS
-                    ? fetchAllDocuments(databases, DB_ID, COLLECTIONS.PARTNERS)
-                    : Promise.resolve([]),
-                COLLECTIONS.PROGRAM_PARTNERS
-                    ? fetchAllDocuments(databases, DB_ID, COLLECTIONS.PROGRAM_PARTNERS)
-                    : Promise.resolve([]),
-                COLLECTIONS.ENROLLMENTS
-                    ? fetchAllDocuments(databases, DB_ID, COLLECTIONS.ENROLLMENTS)
-                    : Promise.resolve([]),
+                fetchCollectionOrEmpty(databases, DB_ID, COLLECTIONS.TRAINERS),
+                fetchCollectionOrEmpty(databases, DB_ID, COLLECTIONS.PARTNERS),
+                fetchCollectionOrEmpty(databases, DB_ID, COLLECTIONS.PROGRAM_PARTNERS),
+                fetchCollectionOrEmpty(databases, DB_ID, COLLECTIONS.ENROLLMENTS),
             ]);
-            const enrollmentByTrainee = buildEnrollmentByTrainee(enrollmentDocs);
+            const enrollmentByTrainee = buildEnrollmentListsByTrainee(enrollmentDocs);
             const mergedTrainees = traineeDocs.map((t) => mergeTraineeWithEnrollment(enrollmentByTrainee, t));
             setTraineesRaw(mergedTrainees);
             setProgramsRaw(programDocs);
@@ -266,24 +263,35 @@ export default function AnalyticsPage() {
         return programOk && courseOk && trainingOk;
     }), [programsRaw, filters.programId, filters.course, filters.trainingPartnerId, partnersRaw, programPartnerAssignmentIndex]);
     const allowedProgramIds = useMemo(() => new Set(filteredPrograms.map((p) => p.$id)), [filteredPrograms]);
-    const filteredTrainees = useMemo(() => traineesRaw.filter((t) => {
-        const traineeProgramId = getProgramIdFromTrainee(t);
-        const createdYear = getYearFromDate(t.$createdAt || t.created_at);
-        const progYear = getProgramStartYear(programById[traineeProgramId]);
-        const yearOk = filters.year === 'all' || createdYear === filters.year || progYear === filters.year;
+    const scopedAllowedProgramIds = useMemo(
+        () => ((filters.programId === 'all' && filters.trainingPartnerId === 'all') ? null : allowedProgramIds),
+        [filters.programId, filters.trainingPartnerId, allowedProgramIds],
+    );
+    const personFilteredTrainees = useMemo(() => traineesRaw.filter((t) => {
         const genderOk = filters.gender === 'all' || normalizeGender(t.gender).toLowerCase() === filters.gender;
-        const programOk = (filters.programId === 'all' && filters.trainingPartnerId === 'all')
-            || allowedProgramIds.has(traineeProgramId);
         const districtOk = filters.district === 'all'
             || !String(filters.district || '').trim()
             || String(t.district || '').trim().toLowerCase() === String(filters.district).trim().toLowerCase();
-        const courseOk = traineeMatchesCourseFilter(t, filters.course, programById);
-        return yearOk && genderOk && programOk && districtOk && courseOk;
-    }), [traineesRaw, filters, allowedProgramIds, programById]);
+        return genderOk && districtOk;
+    }), [traineesRaw, filters.gender, filters.district]);
+    const enrollmentScope = useMemo(() => ({
+        year: filters.year,
+        programId: filters.programId,
+        course: filters.course,
+        allowedProgramIds: scopedAllowedProgramIds,
+    }), [filters.year, filters.programId, filters.course, scopedAllowedProgramIds]);
+    const filteredEnrollmentRows = useMemo(
+        () => expandTraineesByEnrollment(personFilteredTrainees).filter((row) => enrollmentRowMatchesScope(row, enrollmentScope, programById)),
+        [personFilteredTrainees, enrollmentScope, programById],
+    );
+    const filteredTrainees = useMemo(
+        () => personFilteredTrainees.filter((t) => expandTraineesByEnrollment([t]).some((row) => enrollmentRowMatchesScope(row, enrollmentScope, programById))),
+        [personFilteredTrainees, enrollmentScope, programById],
+    );
     const stats = useMemo(() => {
-        const completedCount = filteredTrainees.filter((t) => normalizeTraineeStatus(t.status) === 'completed').length;
-        const currentlyEnrolledCount = filteredTrainees.filter((t) => isTraineeStatusEnrolled(t.status)).length;
-        const inProgressCount = filteredTrainees.filter((t) => isTraineeStatusInProgress(t.status)).length;
+        const completedCount = filteredEnrollmentRows.filter((t) => normalizeTraineeStatus(t.status) === 'completed').length;
+        const currentlyEnrolledCount = filteredEnrollmentRows.filter((t) => isTraineeStatusEnrolled(t.status)).length;
+        const inProgressCount = filteredEnrollmentRows.filter((t) => isTraineeStatusInProgress(t.status)).length;
         const certifiedCount = filteredTrainees.filter((t) => normalizeCertificationStatus(t.certification_status || t.certificationStatus) === 'Certified').length;
         const activePartnersCount = partnersRaw.filter((p) => {
             if (!isPartnerActive(p))
@@ -302,10 +310,11 @@ export default function AnalyticsPage() {
             completedCount,
             certifiedCount,
             totalTrainees: filteredTrainees.length,
+            totalEnrollments: filteredEnrollmentRows.length,
             activePartners: activePartnersCount,
             avgTrainingWeeks,
         };
-    }, [filteredTrainees, filteredPrograms, partnersRaw, filters.trainingPartnerId]);
+    }, [filteredTrainees, filteredEnrollmentRows, filteredPrograms, partnersRaw, filters.trainingPartnerId]);
     const data = useMemo(() => {
         const statusMap = { upcoming: 0, ongoing: 0, completed: 0 };
         filteredPrograms.forEach((p) => {
@@ -334,9 +343,11 @@ export default function AnalyticsPage() {
             'count',
         );
         const attendanceMap = {};
-        filteredTrainees.forEach((t) => {
+        filteredEnrollmentRows.forEach((t) => {
             const pid = getProgramIdFromTrainee(t);
             const label = getCourseLabel(getCourseKeyFromProgram(programById[pid]));
+            if (!label || label === 'Uncategorized')
+                return;
             attendanceMap[label] = (attendanceMap[label] || 0) + 1;
         });
         const courseAttendance = enrichDistributionWithPercent(
@@ -365,7 +376,7 @@ export default function AnalyticsPage() {
             { name: 'Senior RETC Facilitator', count: trainerRoleMap.senior_trainer || 0 },
         ], 'count');
         const yearlyMap = {};
-        filteredTrainees.forEach((t) => {
+        filteredEnrollmentRows.forEach((t) => {
             const pid = getProgramIdFromTrainee(t);
             const year = getProgramStartYear(programById[pid])
                 || getYearFromDate(t.$createdAt || t.created_at);
@@ -393,14 +404,14 @@ export default function AnalyticsPage() {
             trainingPartnerContribution,
             otherPartnerContribution,
         };
-    }, [filteredTrainees, filteredPrograms, trainersRaw, partnersRaw, programPartnerAssignmentIndex, programById]);
+    }, [filteredTrainees, filteredEnrollmentRows, filteredPrograms, trainersRaw, partnersRaw, programPartnerAssignmentIndex, programById]);
     const levelByCategory = useMemo(
-        () => buildLevelByCourseCategory(filteredTrainees, programById, getProgramIdFromTrainee),
-        [filteredTrainees, programById],
+        () => buildLevelByCourseCategory(filteredEnrollmentRows, programById, { alreadyExpanded: true }),
+        [filteredEnrollmentRows, programById],
     );
     const genderByCategory = useMemo(
-        () => buildGenderByCourseCategory(filteredTrainees, programById, getProgramIdFromTrainee),
-        [filteredTrainees, programById],
+        () => buildGenderByCourseCategory(filteredEnrollmentRows, programById, { alreadyExpanded: true }),
+        [filteredEnrollmentRows, programById],
     );
     const years = useMemo(() => {
         const set = new Set();
@@ -408,10 +419,11 @@ export default function AnalyticsPage() {
             const y = getYearFromDate(t.$createdAt || t.created_at);
             if (y)
                 set.add(y);
-            const pid = getProgramIdFromTrainee(t);
-            const py = pid ? getProgramStartYear(programById[pid]) : '';
-            if (py)
-                set.add(py);
+            getProgramIdsFromTrainee(t).forEach((pid) => {
+                const py = pid ? getProgramStartYear(programById[pid]) : '';
+                if (py)
+                    set.add(py);
+            });
         });
         return Array.from(set).sort((a, b) => Number(b) - Number(a));
     }, [traineesRaw, programById]);
@@ -535,8 +547,8 @@ export default function AnalyticsPage() {
             cards.push({
                 id: 'courseAttendance',
                 pickerLabel: 'By category',
-                title: 'Trainees by Course Category (%)',
-                description: 'Trainees grouped by renewable energy course category.',
+                title: 'Enrollments by Course Category (%)',
+                description: 'One count per course enrollment (same person in two courses counts twice).',
                 element: (<ResponsiveContainer width="100%" height={chartH}>
                   <BarChart data={data.courseAttendance} maxBarSize={56} margin={{ top: 12, right: 8, left: 4, bottom: 56 }}>
                     <CartesianGrid {...chartGridProps}/>
@@ -602,7 +614,7 @@ export default function AnalyticsPage() {
                 id: 'yearlyParticipation',
                 pickerLabel: 'Yearly trend',
                 title: 'Yearly Participation (%) of total in view',
-                description: 'Trainees by year (% of all trainees in scope).',
+                description: 'Course enrollments by year (% of all enrollments in scope).',
                 element: (<ResponsiveContainer width="100%" height={chartH}>
                   <LineChart data={data.yearlyParticipation} margin={{ top: 12, right: 8, left: 4, bottom: 8 }}>
                     <CartesianGrid {...chartGridProps}/>
@@ -730,11 +742,12 @@ export default function AnalyticsPage() {
                 head: [['Metric', 'Count']],
                 body: [
                     ['Trainings conducted', String(filteredPrograms.length)],
-                    ['Trainees currently enrolled', formatCountWithPercent(stats.currentlyEnrolledCount, stats.totalTrainees, 1)],
-                    ['Trainees in progress', formatCountWithPercent(stats.inProgressCount, stats.totalTrainees, 1)],
-                    ['Trainees completed', formatCountWithPercent(stats.completedCount, stats.totalTrainees, 1)],
+                    ['Enrollments currently enrolled', formatCountWithPercent(stats.currentlyEnrolledCount, stats.totalEnrollments, 1)],
+                    ['Enrollments in progress', formatCountWithPercent(stats.inProgressCount, stats.totalEnrollments, 1)],
+                    ['Enrollments completed', formatCountWithPercent(stats.completedCount, stats.totalEnrollments, 1)],
                     ['Trainees certified', formatCountWithPercent(stats.certifiedCount, stats.totalTrainees, 1)],
-                    ['Total trainees (in scope)', String(stats.totalTrainees)],
+                    ['Total trainees (unique people)', String(stats.totalTrainees)],
+                    ['Total course enrollments', String(stats.totalEnrollments)],
                     ['Active partners (distinct)', String(stats.activePartners)],
                     ['Avg training period (weeks)', String(stats.avgTrainingWeeks)],
                 ],
@@ -748,15 +761,15 @@ export default function AnalyticsPage() {
             doc.setFont('helvetica', 'bold');
             doc.setFontSize(11);
             doc.setTextColor(51, 65, 85);
-            doc.text('TRAINEES BY COURSE CATEGORY', marginX, y);
+            doc.text('ENROLLMENTS BY COURSE CATEGORY', marginX, y);
             y += 7;
             const courseRows = data.courseAttendance.length > 0
-                ? data.courseAttendance.map((item) => [item.course, formatCountWithPercent(item.trainees, stats.totalTrainees, 1)])
+                ? data.courseAttendance.map((item) => [item.course, formatCountWithPercent(item.trainees, stats.totalEnrollments, 1)])
                 : [['No course-level data in scope', '—']];
             autoTable(doc, {
                 ...tableBase,
                 startY: y,
-                head: [[COURSE_MODULE_LABELS.categoryFilterLabel, 'Trainees (% of scope)']],
+                head: [[COURSE_MODULE_LABELS.categoryFilterLabel, 'Enrollments (% of scope)']],
                 body: courseRows,
                 columnStyles: {
                     0: { cellWidth: contentW * 0.62, halign: 'left', textColor: [15, 23, 42] },
@@ -801,7 +814,7 @@ export default function AnalyticsPage() {
                     'Technician (share of row)',
                     'Trainer (share of row)',
                     'Total',
-                    '% of all trainees',
+                    '% of all enrollments',
                 ]],
                 body: matrixRows,
                 headStyles: { ...tableBase.headStyles, fontSize: 8 },
@@ -816,14 +829,15 @@ export default function AnalyticsPage() {
                 },
             });
             y = doc.lastAutoTable.finalY + 12;
-            if (filteredTrainees.length > 0) {
+            if (filteredEnrollmentRows.length > 0) {
                 y = appendGenderReportSections(doc, y, {
                     marginX,
                     contentWidth: contentW,
                     tableBase,
-                    trainees: filteredTrainees,
+                    trainees: filteredEnrollmentRows,
                     programById,
                     summaryTitle: 'GENDER (OVERALL)',
+                    enrollmentRowsAlreadyExpanded: true,
                 });
             }
             doc.setFont('helvetica', 'bold');
@@ -930,10 +944,10 @@ export default function AnalyticsPage() {
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-7">
         {[
           { key: 'trainings', label: 'Trainings', value: stats.trainingsConducted, hint: null, pct: null, accent: 'green', valueClass: 'text-slate-900' },
-          { key: 'enrolled', label: 'Enrolled', value: stats.currentlyEnrolledCount, hint: 'Not yet in training', pct: stats.totalTrainees > 0 ? formatPercent(stats.currentlyEnrolledCount, stats.totalTrainees) : null, accent: 'green-soft', valueClass: 'text-slate-800' },
-          { key: 'progress', label: 'In progress', value: stats.inProgressCount, hint: 'Active training', pct: stats.totalTrainees > 0 ? formatPercent(stats.inProgressCount, stats.totalTrainees) : null, accent: 'orange', valueClass: 'text-[#ff8829]' },
-          { key: 'completed', label: 'Completed', value: stats.completedCount, hint: null, pct: stats.totalTrainees > 0 ? formatPercent(stats.completedCount, stats.totalTrainees) : null, accent: 'green', valueClass: 'text-[#047857]' },
-          { key: 'total', label: 'Total trainees', value: stats.totalTrainees, hint: 'Filter scope', pct: null, accent: 'orange-soft', valueClass: 'text-[#ff8829]' },
+          { key: 'enrolled', label: 'Currently enrolled', value: stats.currentlyEnrolledCount, hint: 'Not yet in training', pct: stats.totalEnrollments > 0 ? formatPercent(stats.currentlyEnrolledCount, stats.totalEnrollments) : null, accent: 'green-soft', valueClass: 'text-slate-800' },
+          { key: 'progress', label: 'In progress', value: stats.inProgressCount, hint: 'Active training', pct: stats.totalEnrollments > 0 ? formatPercent(stats.inProgressCount, stats.totalEnrollments) : null, accent: 'orange', valueClass: 'text-[#ff8829]' },
+          { key: 'completed', label: 'Completed', value: stats.completedCount, hint: null, pct: stats.totalEnrollments > 0 ? formatPercent(stats.completedCount, stats.totalEnrollments) : null, accent: 'green', valueClass: 'text-[#047857]' },
+          { key: 'total', label: 'Total trainees', value: stats.totalTrainees, hint: stats.totalEnrollments !== stats.totalTrainees ? `${stats.totalEnrollments} enrollments` : 'Filter scope', pct: null, accent: 'orange-soft', valueClass: 'text-[#ff8829]' },
           { key: 'partners', label: 'Active partners', value: stats.activePartners, hint: null, pct: null, accent: 'green', valueClass: 'text-[#047857]' },
           { key: 'weeks', label: 'Avg weeks', value: stats.avgTrainingWeeks, hint: null, pct: null, accent: 'orange', valueClass: 'text-[#ff8829]' },
         ].map((tile) => {
@@ -953,7 +967,7 @@ export default function AnalyticsPage() {
               <p className="text-[11px] font-semibold leading-tight text-slate-600">{tile.label}</p>
               {tile.hint && <p className="text-[10px] leading-tight text-slate-500">{tile.hint}</p>}
               <p className={`mt-0.5 text-lg font-bold leading-none tabular-nums ${tile.valueClass}`}>{tile.value}</p>
-              {tile.pct && <p className={`mt-0.5 text-[10px] font-medium ${pctClass}`}>{tile.pct} of trainees</p>}
+              {tile.pct && <p className={`mt-0.5 text-[10px] font-medium ${pctClass}`}>{tile.pct} of enrollments</p>}
             </div>
           );
         })}
@@ -964,7 +978,7 @@ export default function AnalyticsPage() {
           <div className="mb-4">
             <h2 className="text-lg font-semibold text-gray-900">Participants by level and course category</h2>
             <p className="mt-1 text-sm text-slate-600">
-              Stacked bars show the share of each participant level within each {COURSE_MODULE_LABELS.categoryFilterLabel.toLowerCase()} (Y-axis: 0–100%). Tooltip shows counts and percentages.
+              One bar segment per course enrollment. Stacked bars show participant level within each {COURSE_MODULE_LABELS.categoryFilterLabel.toLowerCase()} (Y-axis: 0–100%).
             </p>
           </div>
           <ResponsiveContainer width="100%" height={Math.max(260, levelByCategory.stackedChartData.length * 36)}>
@@ -1045,7 +1059,7 @@ export default function AnalyticsPage() {
           <div className="mb-4">
             <h2 className="text-lg font-semibold text-gray-900">Participants by gender and course category</h2>
             <p className="mt-1 text-sm text-slate-600">
-              Stacked bars show male, female, and other participants within each {COURSE_MODULE_LABELS.categoryFilterLabel.toLowerCase()} (Y-axis: 0–100%). Tooltip shows counts and percentages.
+              One bar segment per course enrollment. Stacked bars show gender within each {COURSE_MODULE_LABELS.categoryFilterLabel.toLowerCase()} (Y-axis: 0–100%).
             </p>
           </div>
           <ResponsiveContainer width="100%" height={Math.max(260, genderByCategory.stackedChartData.length * 36)}>

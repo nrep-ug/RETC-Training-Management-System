@@ -24,6 +24,7 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
         course: '',
         training_partner: '',
         training_partner_id: '',
+        training_partner_ids: [],
         partner_ids: [],
         description: '',
         training_location: '',
@@ -69,21 +70,28 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
                 title: program.title,
                 course: getCourseKeyFromProgram(program),
                 training_partner: program.training_partner || program.trainingPartner || program['training-partners'] || program.training_partners || '',
-                training_partner_id: program.training_partner_id
-                    || program.trainingPartnerId
-                    || (program['training-partners'] && typeof program['training-partners'] === 'object'
-                        ? (program['training-partners'].$id || program['training-partners'].documentId || program['training-partners'].id || '')
-                        : '')
-                    || '',
-                partner_ids: (() => {
-                    const raw = Array.isArray(program.partner_ids) ? program.partner_ids : [];
-                    const mainId = program.training_partner_id
+                training_partner_id: program.training_partner_id || program.trainingPartnerId || '',
+                training_partner_ids: (() => {
+                    const fromArray = Array.isArray(program.training_partner_ids) ? program.training_partner_ids : [];
+                    if (fromArray.length > 0)
+                        return fromArray.map((id) => String(id || '').trim()).filter(Boolean);
+                    const legacy = program.training_partner_id
                         || program.trainingPartnerId
                         || (program['training-partners'] && typeof program['training-partners'] === 'object'
                             ? (program['training-partners'].$id || program['training-partners'].documentId || program['training-partners'].id || '')
                             : '')
                         || '';
-                    return raw.filter((id) => id && id !== mainId);
+                    return legacy ? [String(legacy).trim()] : [];
+                })(),
+                partner_ids: (() => {
+                    const raw = Array.isArray(program.partner_ids) ? program.partner_ids : [];
+                    const trainingSet = new Set(
+                        (Array.isArray(program.training_partner_ids) ? program.training_partner_ids : [])
+                            .concat(program.training_partner_id ? [program.training_partner_id] : [])
+                            .map((id) => String(id || '').trim())
+                            .filter(Boolean),
+                    );
+                    return raw.map((id) => String(id || '').trim()).filter((id) => id && !trainingSet.has(id));
                 })(),
                 description: program.description || '',
                 training_location: program.training_location || program.trainingLocation || program.location || program.venue || '',
@@ -114,23 +122,27 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
     useEffect(() => {
         if (!open || !program)
             return;
+        const nextTrainingIds = (() => {
+            const fromArray = Array.isArray(program.training_partner_ids) ? program.training_partner_ids : [];
+            if (fromArray.length > 0)
+                return fromArray.map((id) => String(id || '').trim()).filter(Boolean);
+            const legacy = String(program.training_partner_id || program.trainingPartnerId || '').trim();
+            return legacy ? [legacy] : [];
+        })();
+        const trainingSet = new Set(nextTrainingIds);
         const raw = Array.isArray(program.partner_ids) ? program.partner_ids : [];
-        const mainId = String(program.training_partner_id
-            || program.trainingPartnerId
-            || (program['training-partners'] && typeof program['training-partners'] === 'object'
-                ? (program['training-partners'].$id || program['training-partners'].documentId || program['training-partners'].id || '')
-                : '')
-            || '').trim();
-        const nextPartnerIds = raw.map((id) => String(id || '').trim()).filter((id) => id && id !== mainId);
+        const nextPartnerIds = raw.map((id) => String(id || '').trim()).filter((id) => id && !trainingSet.has(id));
         setFormData((prev) => {
+            const prevTraining = [...prev.training_partner_ids].map(String).sort().join(',');
+            const nextTraining = [...nextTrainingIds].sort().join(',');
             const prevSorted = [...prev.partner_ids].map(String).sort().join(',');
             const nextSorted = [...nextPartnerIds].sort().join(',');
-            const mainChanged = String(prev.training_partner_id || '') !== mainId;
-            if (!mainChanged && prevSorted === nextSorted)
+            if (prevTraining === nextTraining && prevSorted === nextSorted)
                 return prev;
             return {
                 ...prev,
-                training_partner_id: mainId || prev.training_partner_id,
+                training_partner_ids: nextTrainingIds,
+                training_partner_id: nextTrainingIds[0] || '',
                 partner_ids: nextPartnerIds,
             };
         });
@@ -138,6 +150,7 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
         open,
         program?.$id,
         program?.training_partner_id,
+        Array.isArray(program?.training_partner_ids) ? program.training_partner_ids.join(',') : '',
         Array.isArray(program?.partner_ids) ? program.partner_ids.join(',') : '',
     ]);
     const validateStep = (step) => {
@@ -147,8 +160,8 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
         if (step === 1 && !String(formData.course || '').trim()) {
             return COURSE_MODULE_LABELS.categoryRequired;
         }
-        if (step === 1 && !String(formData.training_partner_id || '').trim()) {
-            return 'Partner is required.';
+        if (step === 1 && (!Array.isArray(formData.training_partner_ids) || formData.training_partner_ids.length === 0)) {
+            return 'Select at least one training partner.';
         }
         if (step === 2) {
             if (!String(formData.start_date || '').trim()) {
@@ -169,12 +182,17 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
         }
         return '';
     };
-    const otherPartnersList = useMemo(() => {
-        const mainId = String(formData.training_partner_id || '').trim();
-        if (!mainId)
-            return partners;
-        return partners.filter((p) => partnerDocumentId(p) !== mainId);
-    }, [partners, formData.training_partner_id]);
+    const trainingPartnerIdSet = useMemo(() => new Set(
+        (formData.training_partner_ids || []).map((id) => String(id || '').trim()).filter(Boolean),
+    ), [formData.training_partner_ids]);
+    const otherPartnersList = useMemo(() => partners.filter((p) => {
+        const id = partnerDocumentId(p);
+        return id && !trainingPartnerIdSet.has(id);
+    }), [partners, trainingPartnerIdSet]);
+    const isTrainingPartnerChecked = (partner) => {
+        const id = partnerDocumentId(partner);
+        return id ? trainingPartnerIdSet.has(id) : false;
+    };
     const isOtherPartnerChecked = (partner) => {
         const id = partnerDocumentId(partner);
         if (!id)
@@ -210,6 +228,22 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
     };
     const handleChange = (field, value) => {
         setFormData(prev => ({ ...prev, [field]: value }));
+    };
+    const toggleTrainingPartner = (partnerId, checked) => {
+        setFormData((prev) => {
+            const current = new Set(prev.training_partner_ids);
+            if (checked)
+                current.add(partnerId);
+            else
+                current.delete(partnerId);
+            const training_partner_ids = Array.from(current);
+            return {
+                ...prev,
+                training_partner_ids,
+                training_partner_id: training_partner_ids[0] || '',
+                partner_ids: prev.partner_ids.filter((id) => !current.has(id)),
+            };
+        });
     };
     const togglePartner = (partnerId, checked) => {
         setFormData((prev) => {
@@ -304,30 +338,28 @@ export function ProgramDialog({ open, onOpenChange, program, onSave, trainers = 
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="training_partner">Partner</Label>
-            <Select value={formData.training_partner_id || 'none'} onValueChange={(value) => {
-                const id = value === 'none' ? '' : value;
-                setFormData((prev) => ({
-                    ...prev,
-                    training_partner_id: id,
-                    partner_ids: id ? prev.partner_ids.filter((pid) => pid !== id) : prev.partner_ids,
-                }));
-            }}>
-              <SelectTrigger disabled={isLoading || isPartnersLoading}>
-                <SelectValue placeholder={isPartnersLoading ? 'Loading partners...' : 'Select partner'} />
-              </SelectTrigger>
-              <SelectContent>
-                {partners.map((partner) => (<SelectItem key={partner.$id} value={partner.$id}>
-                    {partner.name}
-                  </SelectItem>))}
-              </SelectContent>
-            </Select>
+          <div className="space-y-3">
+            <div>
+              <Label>Training partners *</Label>
+              <p className="mt-0.5 text-xs text-slate-500">Select all partner organizations delivering this course (one or more).</p>
+            </div>
+            <div className="max-h-36 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3">
+              {partners.length === 0 && (<p className="text-sm text-slate-500">
+                  {isPartnersLoading ? 'Loading partners...' : 'No partners available'}
+                </p>)}
+              {partners.map((partner) => {
+                const pid = partnerDocumentId(partner);
+                return (<label key={pid || partner.$id} className="flex items-center gap-2 text-sm text-slate-700">
+                  <Checkbox checked={isTrainingPartnerChecked(partner)} onCheckedChange={(checked) => toggleTrainingPartner(pid, checked === true)} disabled={isLoading || isPartnersLoading || !pid}/>
+                  <span>{partner.name}</span>
+                </label>);
+              })}
+            </div>
           </div>
           <div className="space-y-3">
             <div>
               <Label>Other partners</Label>
-              <p className="mt-0.5 text-xs text-slate-500">Additional collaborating partners (the partner above is not listed here).</p>
+              <p className="mt-0.5 text-xs text-slate-500">Additional collaborating partners (not listed above).</p>
             </div>
             <div className="max-h-36 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3">
               {partners.length === 0 && (<p className="text-sm text-slate-500">
