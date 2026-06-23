@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { TraineeStatus, TRAINEE_STATUS_HINT, getTraineeStatusLabel } from '@/lib/types';
+import { TraineeStatus, TRAINEE_STATUS_HINT, getTraineeStatusLabel, isConsentGiven } from '@/lib/types';
 import {
     resolveEnrollmentLevelForProgram,
     resolveEnrollmentStatusForProgram,
@@ -74,7 +74,7 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
                 qualification: trainee.qualification || '',
                 next_of_kin_name: trainee.next_of_kin_name || '',
                 next_of_kin_phone: trainee.next_of_kin_phone || '',
-                consent_given: Boolean(trainee.consent_given),
+                consent_given: isConsentGiven(trainee.consent_given),
                 consent_date: trainee.consent_date ? String(trainee.consent_date).split('T')[0] : '',
             });
         }

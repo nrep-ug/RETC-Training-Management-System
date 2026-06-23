@@ -14,6 +14,11 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/hooks/use-toast';
 import { getRetcFacilitatorRoleLabel, RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
+import {
+    buildSpecializationWriteVariants,
+    normalizeSpecializationKeys,
+    trainerMatchesSpecializationQuery,
+} from '@/lib/trainer-specializations';
 function documentStableId(doc) {
     if (!doc)
         return '';
@@ -48,6 +53,13 @@ function sanitizeTrainerPayload(data) {
         }
         cleaned[key] = value;
     });
+    if (Array.isArray(data.specializations)) {
+        const keys = normalizeSpecializationKeys(data.specializations);
+        if (keys.length === 0) {
+            throw new Error('Select at least one specialization.');
+        }
+        cleaned.specializations = keys;
+    }
     if (cleaned.training_partner) {
         // Keep backward compatibility with existing Appwrite schema keys.
         if (!cleaned.organization) {
@@ -71,26 +83,41 @@ function buildTrainerPayloadCandidates(payload) {
     const base = { ...payload };
     const trainingPartner = String(base.training_partner || '').trim();
     const email = String(base.email || '').trim().toLowerCase();
+    const specializations = normalizeSpecializationKeys(base.specializations);
     if (!email) {
         throw new Error('Email is required.');
     }
     if (!trainingPartner) {
         throw new Error('Training partner is required.');
     }
+    if (!specializations.length) {
+        throw new Error('Select at least one specialization.');
+    }
     delete base.training_partner;
     delete base.trainingPartner;
     delete base.training_partners;
     delete base['training-partners'];
     delete base.organization;
+    delete base.specialization;
+    delete base.specialisation;
+    delete base.specializations;
+    delete base.specialization_keys;
+    delete base.specializationKeys;
     base.email = email;
     const candidates = [];
-    // Strict-first payload for current Appwrite schema
-    candidates.push({ ...base, 'training-partners': trainingPartner });
-    // Compatibility fallbacks
-    candidates.push({ ...base, training_partners: trainingPartner });
-    candidates.push({ ...base, trainingPartner: trainingPartner });
-    candidates.push({ ...base, organization: trainingPartner });
-    candidates.push({ ...base });
+    const specVariants = buildSpecializationWriteVariants(specializations);
+    const partnerVariants = [
+        { 'training-partners': trainingPartner },
+        { training_partners: trainingPartner },
+        { trainingPartner: trainingPartner },
+        { organization: trainingPartner },
+        {},
+    ];
+    specVariants.forEach((specPatch) => {
+        partnerVariants.forEach((partnerPatch) => {
+            candidates.push({ ...base, ...specPatch, ...partnerPatch });
+        });
+    });
     return candidates;
 }
 async function createTrainerWithFallback(payload) {
@@ -251,7 +278,7 @@ export default function TrainersPage() {
             const matchesQuery = !q
                 || String(t.name || '').toLowerCase().includes(q)
                 || String(t.email || '').toLowerCase().includes(q)
-                || String(t.specialization || '').toLowerCase().includes(q)
+                || trainerMatchesSpecializationQuery(t, q)
                 || String(t.training_partner || t.trainingPartner || t['training-partners'] || t.training_partners || t.organization || '').toLowerCase().includes(q);
             const matchesRole = filters.role === 'all' || String(t.role || '').toLowerCase() === filters.role;
             const matchesStatus = filters.status === 'all' || String(t.status || '').toLowerCase() === filters.status;

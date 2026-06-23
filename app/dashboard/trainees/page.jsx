@@ -7,7 +7,7 @@ import {
     fetchAllDocuments,
     fetchCollectionOrEmpty,
 } from '@/lib/fetch-all-documents';
-import { TraineeStatus, TRAINEE_STATUS_HINT } from '@/lib/types';
+import { TraineeStatus, TRAINEE_STATUS_HINT, normalizeConsentGivenForAppwrite } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Plus, RefreshCcw, Upload } from 'lucide-react';
@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { TraineeDialog } from '@/components/trainee-dialog';
 import { TraineeTable } from '@/components/trainee-table';
 import { toast } from '@/hooks/use-toast';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -25,18 +25,24 @@ import { assertValidTraineeLevel, enrichTraineeWithLevel, getTraineeLevelFilterS
 import { buildTrainerNameById, getTrainerIdFromProgram, resolveTrainerDisplayName, } from '@/lib/program-trainer';
 import {
     buildEnrollmentsByTrainee,
+    buildTraineeAfterCourseRemoval,
     getEnrollmentProgramId,
     getEnrollmentTraineeId,
     getProgramIdsFromTrainee,
     getTraineeLevelForProgram,
     getTraineeStatusForProgram,
+    getLinkedProgramIdsForTrainee,
     mergeTraineeWithEnrollment,
+    pickNextProgramIdAfterRemoval,
     pickPrimaryProgramId,
+    resolveEnrollmentRemovalProgramId,
     resolveTraineeDialogProgramId,
+    traineeHasMultipleCourses,
 } from '@/lib/trainee-enrollment';
 import {
     deleteEnrollmentForTraineeProgram,
     deleteEnrollmentsForTrainee,
+    findEnrollmentRow,
     traineeAlreadyOnProgram,
     upsertTraineeEnrollment,
 } from '@/lib/trainee-enrollment-sync';
@@ -114,15 +120,8 @@ function sanitizeTraineePayload(data) {
         }
         cleaned[key] = value;
     });
-    if (typeof cleaned.consent_given === 'boolean') {
-        cleaned.consent_given = cleaned.consent_given ? 'yes' : 'no';
-    }
-    if (typeof cleaned.consent_given === 'string') {
-        const normalized = cleaned.consent_given.trim().toLowerCase();
-        cleaned.consent_given = (normalized === 'yes' || normalized === 'true' || normalized === '1') ? 'yes' : 'no';
-    }
-    if (!cleaned.consent_given) {
-        cleaned.consent_given = 'no';
+    if (typeof cleaned.consent_given === 'boolean' || typeof cleaned.consent_given === 'string') {
+        cleaned.consent_given = normalizeConsentGivenForAppwrite(cleaned.consent_given);
     }
     if (!cleaned.certification_status) {
         cleaned.certification_status = 'pending';
@@ -135,37 +134,61 @@ function buildTraineePayloadCandidates(payload, programId) {
         base.program_id = programId;
     }
     const levelKey = payload.trainee_level ? assertValidTraineeLevel(payload.trainee_level) : '';
-    const strictStringConsent = {
-        ...base,
-        consent_given: String(base.consent_given || 'no'),
-    };
-    if (levelKey) {
-        strictStringConsent.trainee_level = levelKey;
-    }
-    const withoutConsentDate = { ...strictStringConsent };
+    const withConsent = payload.consent_given != null && payload.consent_given !== ''
+        ? {
+            ...base,
+            consent_given: normalizeConsentGivenForAppwrite(payload.consent_given),
+        }
+        : { ...base };
+    const withoutConsentDate = { ...withConsent };
     delete withoutConsentDate.consent_date;
-    const consentTrueFalse = {
-        ...withoutConsentDate,
-        consent_given: withoutConsentDate.consent_given === 'yes' ? 'true' : 'false',
-    };
-    const candidates = [strictStringConsent, withoutConsentDate, consentTrueFalse];
+    const consentTrueFalse = withConsent.consent_given != null
+        ? {
+            ...withoutConsentDate,
+            consent_given: withConsent.consent_given === 'yes' ? 'true' : 'false',
+        }
+        : null;
+    const candidates = consentTrueFalse
+        ? [withConsent, withoutConsentDate, consentTrueFalse]
+        : [withConsent, withoutConsentDate];
     if (levelKey) {
-        const withCamelLevel = { ...strictStringConsent, traineeLevel: levelKey };
+        const withLevel = { ...withConsent, trainee_level: levelKey };
+        const withCamelLevel = { ...withConsent, traineeLevel: levelKey };
         delete withCamelLevel.trainee_level;
-        const withShortLevel = { ...strictStringConsent, level: levelKey };
+        const withShortLevel = { ...withConsent, level: levelKey };
         delete withShortLevel.trainee_level;
         const withShortLevelNoDate = { ...withoutConsentDate, level: levelKey };
         delete withShortLevelNoDate.trainee_level;
-        candidates.unshift(withShortLevel, withCamelLevel, withShortLevelNoDate);
+        candidates.unshift(withShortLevel, withCamelLevel, withShortLevelNoDate, withLevel);
     }
     else {
-        const withoutLevel = { ...strictStringConsent };
+        const withoutLevel = { ...withConsent };
         delete withoutLevel.trainee_level;
         const withoutLevelNoDate = { ...withoutConsentDate };
         delete withoutLevelNoDate.trainee_level;
         candidates.push(withoutLevel, withoutLevelNoDate);
     }
     return candidates;
+}
+async function updateTraineeProgramIdOnly(traineeId, programId) {
+    const pid = String(programId || '').trim();
+    if (!pid)
+        throw new Error('Remaining course id is required.');
+    const candidates = [
+        { program_id: pid },
+        { programId: pid },
+    ];
+    const attemptErrors = [];
+    for (let i = 0; i < candidates.length; i++) {
+        try {
+            return await databases.updateDocument(DB_ID, COLLECTIONS.TRAINEES, traineeId, candidates[i]);
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            attemptErrors.push(`Attempt ${i + 1}: ${msg}`);
+        }
+    }
+    throw new Error(`Failed to update trainee course link. ${attemptErrors.join(' | ')}`);
 }
 function isUnknownTraineeLevelAttributeError(message) {
     const msg = String(message || '');
@@ -254,6 +277,8 @@ export default function TraineesPage() {
     const [showDialog, setShowDialog] = useState(false);
     const [selectedTrainee, setSelectedTrainee] = useState(null);
     const [pendingDelete, setPendingDelete] = useState(null);
+    const [deleteBusy, setDeleteBusy] = useState(false);
+    const pendingDeleteRef = useRef(null);
     const [enrollmentRows, setEnrollmentRows] = useState([]);
     const [filters, setFilters] = useState({
         query: '',
@@ -401,28 +426,17 @@ export default function TraineesPage() {
             setTrainers(trainerDocs);
         });
     }, [showDialog]);
-    const resolveEnrollmentRemovalProgramId = (trainee, programFilterId) => {
-        const programIds = getProgramIdsFromTrainee(trainee);
-        const filterId = String(programFilterId || '').trim();
-        if (filterId && filterId !== 'all' && programIds.includes(filterId))
-            return filterId;
-        if (programIds.length > 1) {
-            const primary = String(trainee.program_id || '').trim();
-            if (primary && programIds.includes(primary))
-                return primary;
-        }
-        if (programIds.length === 1)
-            return programIds[0];
-        return '';
-    };
+    const resolveEnrollmentRemovalProgramIdForDialog = (trainee, programFilterId) => resolveEnrollmentRemovalProgramId(trainee, programFilterId, enrollmentRows);
     const handleDeleteTrainee = (trainee) => {
+        pendingDeleteRef.current = trainee;
         setPendingDelete({ trainee });
     };
-    const confirmDeleteTraineeEntirely = async () => {
-        const trainee = pendingDelete?.trainee;
+    const confirmDeleteTraineeEntirely = async (traineeArg) => {
+        const trainee = traineeArg || pendingDeleteRef.current || pendingDelete?.trainee;
         if (!trainee)
             return;
         const traineeId = documentStableId(trainee);
+        setDeleteBusy(true);
         try {
             if (COLLECTIONS.ENROLLMENTS) {
                 await deleteEnrollmentsForTrainee(databases, DB_ID, COLLECTIONS.ENROLLMENTS, traineeId, enrollmentRows);
@@ -444,45 +458,62 @@ export default function TraineesPage() {
             });
         }
         finally {
+            setDeleteBusy(false);
+            pendingDeleteRef.current = null;
             setPendingDelete(null);
         }
     };
-    const confirmRemoveFromCourse = async () => {
-        const trainee = pendingDelete?.trainee;
+    const confirmRemoveFromCourse = async (traineeArg, removalProgramIdArg) => {
+        const trainee = traineeArg || pendingDeleteRef.current || pendingDelete?.trainee;
         if (!trainee)
             return;
         const traineeId = documentStableId(trainee);
-        const programId = resolveEnrollmentRemovalProgramId(trainee, filters.programId);
+        const programId = String(
+            removalProgramIdArg
+            || resolveEnrollmentRemovalProgramId(trainee, filters.programId, enrollmentRows)
+            || '',
+        ).trim();
         if (!programId || !COLLECTIONS.ENROLLMENTS) {
-            await confirmDeleteTraineeEntirely();
+            await confirmDeleteTraineeEntirely(trainee);
             return;
         }
         const courseTitle = programs.find((p) => p.$id === programId)?.title
             || programs.find((p) => p.$id === programId)?.name
             || programId;
+        setDeleteBusy(true);
         try {
-            await deleteEnrollmentForTraineeProgram(
+            const freshEnrollmentRows = await fetchCollectionOrEmpty(databases, DB_ID, COLLECTIONS.ENROLLMENTS);
+            const hadEnrollmentRow = Boolean(findEnrollmentRow(freshEnrollmentRows, traineeId, programId));
+            const deletedEnrollment = await deleteEnrollmentForTraineeProgram(
                 databases,
                 DB_ID,
                 COLLECTIONS.ENROLLMENTS,
                 traineeId,
                 programId,
-                enrollmentRows,
+                freshEnrollmentRows,
             );
-            const remainingIds = getProgramIdsFromTrainee(trainee).filter((id) => id !== programId);
+            const enrollmentRowsAfterDelete = freshEnrollmentRows.filter((row) => !(
+                getEnrollmentTraineeId(row) === traineeId
+                && getEnrollmentProgramId(row) === programId
+            ));
+            const { traineeSansRemoved, remainingIds } = buildTraineeAfterCourseRemoval(
+                trainee,
+                programId,
+                deletedEnrollment ? enrollmentRowsAfterDelete : freshEnrollmentRows,
+            );
+            const legacyProgramId = String(trainee.program_id || trainee.programId || '').trim();
+            const removedLegacyOnly = !hadEnrollmentRow && legacyProgramId === programId;
+            if (!deletedEnrollment && !removedLegacyOnly) {
+                throw new Error(`Could not find an enrollment row for "${courseTitle}". Refresh the page and try again.`);
+            }
             if (remainingIds.length > 0) {
-                const remainingEnrollments = (trainee.enrollments || []).filter((e) => e?.programId && e.programId !== programId);
-                const nextProgramId = pickPrimaryProgramId(
-                    remainingEnrollments.length > 0
-                        ? remainingEnrollments
-                        : remainingIds.map((id) => ({ programId: id, status: '' })),
-                    remainingIds[0],
-                );
-                await updateTraineeWithFallback(traineeId, {}, nextProgramId);
-                setEnrollmentRows((rows) => rows.filter((row) => !(
-                    getEnrollmentTraineeId(row) === traineeId
-                    && getEnrollmentProgramId(row) === programId
-                )));
+                const remainingEnrollments = (traineeSansRemoved.enrollments || []).filter((e) => e?.programId);
+                const nextProgramId = pickNextProgramIdAfterRemoval(remainingIds, remainingEnrollments, programId);
+                if (!nextProgramId) {
+                    throw new Error('Could not determine the trainee\'s remaining course.');
+                }
+                await updateTraineeProgramIdOnly(traineeId, nextProgramId);
+                setEnrollmentRows(enrollmentRowsAfterDelete);
                 await fetchTrainees();
                 toast({
                     title: 'Removed from course',
@@ -508,10 +539,11 @@ export default function TraineesPage() {
             });
         }
         finally {
+            setDeleteBusy(false);
+            pendingDeleteRef.current = null;
             setPendingDelete(null);
         }
     };
-    const trainerById = useMemo(() => buildTrainerNameById(trainers), [trainers]);
     const programById = useMemo(() => Object.fromEntries(programs.map((p) => [p.$id, { ...p, course: getCourseKeyFromProgram(p) }])), [programs]);
     const handleSaveTrainee = async (data) => {
         try {
@@ -766,15 +798,17 @@ export default function TraineesPage() {
       {/* Add/Edit Dialog */}
       {isAdmin && (<TraineeDialog open={showDialog} onOpenChange={setShowDialog} trainee={selectedTrainee} onSave={handleSaveTrainee} programs={programs} isProgramsLoading={isProgramsLoading} programMap={Object.fromEntries(programs.map((p) => [p.$id, p.title || p.name || '']))}/>)}
       <AlertDialog open={!!pendingDelete?.trainee} onOpenChange={(open) => {
-            if (!open)
+            if (!open && !deleteBusy) {
+                pendingDeleteRef.current = null;
                 setPendingDelete(null);
+            }
         }}>
         <AlertDialogContent className="border-[#047857]/25">
           {(() => {
             const trainee = pendingDelete?.trainee;
-            const programIds = trainee ? getProgramIdsFromTrainee(trainee) : [];
-            const removalProgramId = trainee ? resolveEnrollmentRemovalProgramId(trainee, filters.programId) : '';
-            const multiCourse = programIds.length > 1;
+            const linkedProgramIds = trainee ? getLinkedProgramIdsForTrainee(trainee, enrollmentRows) : [];
+            const removalProgramId = trainee ? resolveEnrollmentRemovalProgramIdForDialog(trainee, filters.programId) : '';
+            const multiCourse = trainee ? traineeHasMultipleCourses(trainee, enrollmentRows) : false;
             const canRemoveFromCourseOnly = Boolean(COLLECTIONS.ENROLLMENTS && multiCourse && removalProgramId);
             const removalCourseTitle = programs.find((p) => p.$id === removalProgramId)?.title
                 || programs.find((p) => p.$id === removalProgramId)?.name
@@ -784,7 +818,7 @@ export default function TraineesPage() {
                   <AlertDialogHeader>
                     <AlertDialogTitle>Remove from course or delete person?</AlertDialogTitle>
                     <AlertDialogDescription>
-                      <span className="font-medium text-slate-800">{trainee?.name}</span> is enrolled in multiple courses.
+                      <span className="font-medium text-slate-800">{trainee?.name}</span> is linked to {linkedProgramIds.length} courses.
                       {' '}Remove them from <span className="font-medium text-slate-800">&quot;{removalCourseTitle}&quot;</span> only
                       {filters.programId !== 'all'
                         ? ' (matches your course filter)'
@@ -793,25 +827,23 @@ export default function TraineesPage() {
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:flex-wrap">
-                    <AlertDialogCancel className="border-[#ff8829] text-[#b45309] hover:bg-[#fff4eb] hover:text-[#9a3f05]">Cancel</AlertDialogCancel>
-                    <AlertDialogAction
+                    <AlertDialogCancel disabled={deleteBusy} className="border-[#ff8829] text-[#b45309] hover:bg-[#fff4eb] hover:text-[#9a3f05]">Cancel</AlertDialogCancel>
+                    <Button
+                      type="button"
+                      disabled={deleteBusy}
                       className="bg-[#047857] text-white hover:bg-[#036349]"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        void confirmRemoveFromCourse();
-                      }}
+                      onClick={() => void confirmRemoveFromCourse(trainee, removalProgramId)}
                     >
-                      Remove from this course
-                    </AlertDialogAction>
-                    <AlertDialogAction
-                      className="bg-red-600 text-white hover:bg-red-700"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        void confirmDeleteTraineeEntirely();
-                      }}
+                      {deleteBusy ? 'Removing…' : 'Remove from this course'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      disabled={deleteBusy}
+                      onClick={() => void confirmDeleteTraineeEntirely(trainee)}
                     >
                       Delete trainee entirely
-                    </AlertDialogAction>
+                    </Button>
                   </AlertDialogFooter>
                 </>);
             }
@@ -820,20 +852,19 @@ export default function TraineesPage() {
                 <AlertDialogTitle>Delete trainee?</AlertDialogTitle>
                 <AlertDialogDescription>
                   This will permanently remove <span className="font-medium text-slate-800">{trainee?.name}</span>
-                  {programIds.length > 0 ? ' and their course enrollment(s)' : ''}. This cannot be undone.
+                  {linkedProgramIds.length > 0 ? ' and their course enrollment(s)' : ''}. This cannot be undone.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel className="border-[#ff8829] text-[#b45309] hover:bg-[#fff4eb] hover:text-[#9a3f05]">Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  className="bg-red-600 text-white hover:bg-red-700"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    void confirmDeleteTraineeEntirely();
-                  }}
+                <AlertDialogCancel disabled={deleteBusy} className="border-[#ff8829] text-[#b45309] hover:bg-[#fff4eb] hover:text-[#9a3f05]">Cancel</AlertDialogCancel>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={deleteBusy}
+                  onClick={() => void confirmDeleteTraineeEntirely(trainee)}
                 >
-                  Delete
-                </AlertDialogAction>
+                  {deleteBusy ? 'Deleting…' : 'Delete'}
+                </Button>
               </AlertDialogFooter>
             </>);
           })()}

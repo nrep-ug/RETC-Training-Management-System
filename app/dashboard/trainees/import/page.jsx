@@ -189,7 +189,9 @@ export default function ImportTraineesPage() {
                     }
                     if (row.consent_given) {
                         const consentValue = String(row.consent_given).trim().toLowerCase();
-                        traineePayload.consent_given = consentValue === 'true' || consentValue === 'yes' || consentValue === '1';
+                        traineePayload.consent_given = (consentValue === 'true' || consentValue === 'yes' || consentValue === '1')
+                            ? 'yes'
+                            : 'no';
                     }
                     if (row.consent_date) {
                         const consentDate = new Date(row.consent_date);

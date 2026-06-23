@@ -26,7 +26,7 @@ import {
     traineeMatchesProgramFilter,
 } from '@/lib/trainee-enrollment';
 import { devWarn } from '@/lib/logger';
-import { getTraineeStatusLabel } from '@/lib/types';
+import { getTraineeStatusLabel, isConsentGiven } from '@/lib/types';
 import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
 import { RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
 import {
@@ -61,30 +61,74 @@ function pdfColumnWidthsMm(contentWidth, weights) {
     return colWidths;
 }
 
+/** Guarantee each column at least minMm, then distribute remaining width by weight. */
+function pdfColumnWidthsWithFloor(contentWidth, specs) {
+    const floors = specs.map((s) => s.minMm ?? 0);
+    const floorSum = floors.reduce((sum, w) => sum + w, 0);
+    const remaining = Math.max(0, contentWidth - floorSum);
+    const totalWeight = specs.reduce((sum, s) => sum + (s.weight ?? 1), 0);
+    const colWidths = specs.map((s, index) => {
+        const extra = totalWeight > 0 ? (remaining * (s.weight ?? 1)) / totalWeight : 0;
+        return Math.floor((floors[index] + extra) * 10) / 10;
+    });
+    const used = colWidths.reduce((sum, w) => sum + w, 0);
+    const lastIdx = colWidths.length - 1;
+    colWidths[lastIdx] = Math.round((colWidths[lastIdx] + (contentWidth - used)) * 10) / 10;
+    return colWidths;
+}
+
 function buildProgramsReportColumnStyles(contentWidth) {
-    const widths = pdfColumnWidthsMm(contentWidth, [
-        5.2, 2.4, 2.2, 2.2, 1.8, 1.3, 0.65, 0.65, 1.05,
+    const widths = pdfColumnWidthsWithFloor(contentWidth, [
+        { weight: 4.5, minMm: 34 },
+        { weight: 1.8, minMm: 20 },
+        { weight: 2.4, minMm: 24 },
+        { weight: 2.2, minMm: 24 },
+        { weight: 1.5, minMm: 18 },
+        { weight: 1.1, minMm: 14 },
+        { weight: 0.9, minMm: 12 },
+        { weight: 0.9, minMm: 11 },
+        { weight: 1.2, minMm: 16 },
     ]);
+    const alignments = ['left', 'left', 'left', 'left', 'left', 'center', 'center', 'center', 'center'];
     const styles = {};
     widths.forEach((cellWidth, index) => {
-        styles[index] = { cellWidth, halign: 'left', valign: 'top' };
+        styles[index] = { cellWidth, halign: alignments[index], valign: 'top' };
     });
-    styles[6].halign = 'center';
-    styles[7].halign = 'center';
-    styles[8].halign = 'center';
     return styles;
 }
 
 function buildTraineesReportColumnStyles(contentWidth) {
-    const widths = pdfColumnWidthsMm(contentWidth, [
-        2.2, 3.6, 1.6, 1, 1.3, 2.6, 2.2, 1.2, 1.2, 1.1,
+    const widths = pdfColumnWidthsWithFloor(contentWidth, [
+        { weight: 2.0, minMm: 22 },
+        { weight: 2.4, minMm: 30 },
+        { weight: 1.2, minMm: 16 },
+        { weight: 1.2, minMm: 17 },
+        { weight: 1.2, minMm: 22 },
+        { weight: 2.2, minMm: 32 },
+        { weight: 1.2, minMm: 22 },
+        { weight: 1.4, minMm: 20 },
+        { weight: 1.6, minMm: 26 },
+        { weight: 1.2, minMm: 17 },
     ]);
+    const alignments = ['left', 'left', 'center', 'center', 'left', 'left', 'left', 'center', 'left', 'center'];
     const styles = {};
     widths.forEach((cellWidth, index) => {
-        styles[index] = { cellWidth, halign: 'left', valign: 'top' };
+        styles[index] = { cellWidth, halign: alignments[index], valign: 'top' };
     });
-    styles[9].halign = 'center';
     return styles;
+}
+
+/** Shared header row styling for main report data tables. */
+function buildReportDataTableHeadStyles(base) {
+    return {
+        ...base.headStyles,
+        fillColor: [255, 136, 41],
+        fontSize: 8,
+        halign: 'center',
+        valign: 'middle',
+        cellPadding: { top: 5, right: 4, bottom: 5, left: 4 },
+        overflow: 'linebreak',
+    };
 }
 
 function getOtherPartnerNamesForProgram(programId, programPartnerMap, partnerById) {
@@ -103,7 +147,7 @@ function formatCertificationLabel(value) {
     if (raw === 'certified')
         return 'Certified';
     if (raw === 'not_certified' || raw === 'not-certified')
-        return 'Not Certified';
+        return 'Not certified';
     return 'Pending';
 }
 function normalizeGender(value) {
@@ -675,7 +719,7 @@ export default function ReportsPage() {
                 t.qualification || '',
                 t.next_of_kin_name || '',
                 t.next_of_kin_phone || '',
-                t.consent_given ? 'Yes' : 'No',
+                isConsentGiven(t.consent_given) ? 'Yes' : 'No',
                 t.consent_date ? new Date(t.consent_date).toLocaleDateString() : '',
                 formatStatusLabelForPdf(t.status),
                 new Date(t.$createdAt || t.created_at).toLocaleDateString(),
@@ -696,7 +740,7 @@ export default function ReportsPage() {
                 autoTable(doc, {
                     ...base,
                     startY: yNext,
-                    head: [['Level', 'Count', '% of trainees in report']],
+                    head: [['Level', 'Count', '% of trainees\nin report']],
                     body: levelSummaryPdfRows(levelByCategory.levelSummary),
                     columnStyles: {
                         0: { cellWidth: cw * 0.4, halign: 'left', textColor: [15, 23, 42] },
@@ -718,14 +762,21 @@ export default function ReportsPage() {
                     startY: yNext,
                     head: [[
                         COURSE_MODULE_LABELS.categoryFilterLabel,
-                        'Beginner (share of row)',
-                        'Technician (share of row)',
-                        'Trainer (share of row)',
+                        'Beginner\n(share of row)',
+                        'Technician\n(share of row)',
+                        'Trainer\n(share of row)',
                         'Total',
-                        '% of all enrollments',
+                        '% of all\nenrollments',
                     ]],
                     body: levelMatrixRows,
-                    headStyles: { ...base.headStyles, fontSize: 8 },
+                    headStyles: {
+                        ...base.headStyles,
+                        fillColor: [4, 120, 87],
+                        fontSize: 8,
+                        halign: 'center',
+                        valign: 'middle',
+                        cellPadding: { top: 5, right: 4, bottom: 5, left: 4 },
+                    },
                     styles: { ...base.styles, fontSize: 8 },
                     columnStyles: {
                         0: { cellWidth: cw * 0.28, halign: 'left' },
@@ -758,12 +809,7 @@ export default function ReportsPage() {
                 : `Registered trainees: ${uniqueTraineeCount} people (${enrollmentRowCount} course enrollments)`;
             doc.text(traineeSectionTitle, REPORT_MARGIN_X, yNext);
             yNext += 7;
-            const headStylesData = {
-                ...base.headStyles,
-                fillColor: [255, 136, 41],
-                fontSize: 8,
-                halign: 'left',
-            };
+            const headStylesData = buildReportDataTableHeadStyles(base);
             const emptyTableMsg = rawTrainees.length === 0
                 ? 'No trainee records were returned from the database.'
                 : allTrainees.length === 0
@@ -814,7 +860,7 @@ export default function ReportsPage() {
                     'Status',
                 ]],
                 body,
-                headStyles: { ...headStylesData, fontSize: 7.5 },
+                headStyles: headStylesData,
                 columnStyles: buildTraineesReportColumnStyles(cw),
             });
             addPdfPageFooters(doc);
@@ -889,14 +935,7 @@ export default function ReportsPage() {
             doc.text(programSectionTitle, REPORT_MARGIN_X, yNext);
             yNext += 7;
             const base = getPdfTableBase(doc);
-            const headStylesData = {
-                ...base.headStyles,
-                fillColor: [255, 136, 41],
-                fontSize: 7.5,
-                halign: 'left',
-                valign: 'middle',
-                cellPadding: { top: 3, right: 2, bottom: 3, left: 2 },
-            };
+            const headStylesData = buildReportDataTableHeadStyles(base);
             const progBody = programList.length > 0
                 ? rows.map((r) => [r[1], r[2], r[3], r[4], r[5], r[7], r[8], r[9], formatStatusLabelForPdf(r[10])])
                 : [[{
@@ -918,8 +957,8 @@ export default function ReportsPage() {
                 head: [[
                     COURSE_MODULE_LABELS.reportFilterLabel,
                     'Category',
-                    'Training partner',
-                    'Other partners',
+                    'Training\npartner',
+                    'Other\npartners',
                     'Location',
                     'Start',
                     'Weeks',
