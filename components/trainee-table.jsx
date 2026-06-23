@@ -8,7 +8,7 @@ import { format } from 'date-fns';
 import { useClientPagination } from '@/hooks/use-client-pagination';
 import { getTraineeLevelLabel } from '@/lib/trainee-levels';
 import { TraineeLevelBadge } from '@/components/trainee-level-badge';
-import { getTraineeStatusLabel, normalizeTraineeStatus } from '@/lib/types';
+import { getTraineeStatusLabel, isConsentGiven, normalizeTraineeStatus } from '@/lib/types';
 import { getTraineeLevelForProgram, getTraineeStatusForProgram } from '@/lib/trainee-enrollment';
 import { TablePaginationFooter } from '@/components/table-pagination-footer';
 import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
@@ -87,7 +87,7 @@ function TraineeDetailView({ trainee, programMap, courseMap, programFilterId = '
         .map((id) => courseMap[id])
         .filter(Boolean)
         .join(', ') || trainee.course_label || '—';
-    const consentGiven = Boolean(trainee.consent_given);
+    const consentGiven = isConsentGiven(trainee.consent_given);
     return (
         <div className="space-y-5 bg-gradient-to-b from-white via-white to-[#f7faf8] px-6 py-5">
             <div className="rounded-xl border border-[#047857]/20 bg-white p-4 shadow-sm">

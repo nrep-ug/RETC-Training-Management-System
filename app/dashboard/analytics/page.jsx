@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Query } from 'appwrite';
 import { databases, DB_ID, COLLECTIONS } from '@/lib/appwrite';
 import { fetchAllDocuments, fetchCollectionOrEmpty } from '@/lib/fetch-all-documents';
@@ -11,6 +12,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ChevronLeft, ChevronRight, Download, RefreshCcw } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { buildAnalyticsReportFilename } from '@/lib/pdf-report-naming';
+import { downloadPdfDocument } from '@/lib/pdf-download';
+import {
+    appendAnalyticsPdfFooters,
+    collectAnalyticsChartExportSections,
+    exportAnalyticsChartsPdf,
+} from '@/lib/analytics-pdf-export';
 import {
     appendGenderReportSections,
     drawPdfSectionHeading,
@@ -19,9 +26,11 @@ import {
 } from '@/lib/pdf-section-table';
 import {
     buildProgramByAnyId,
+    getCourseFilterSelectOptions,
     getCourseKeyFromProgram,
     getCourseLabel,
     programMatchesCourseFilter,
+    UNCATEGORIZED_COURSE_LABEL,
 } from '@/lib/renewable-energy-courses';
 import {
     buildEnrollmentListsByTrainee,
@@ -44,10 +53,15 @@ import autoTable from 'jspdf-autotable';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, LabelList } from 'recharts';
 import {
     GENDER_STACK_COLORS,
+    GENDER_STACK_SERIES,
     LEVEL_CHART_COLORS,
+    LEVEL_STACK_SERIES,
     buildGenderByCourseCategory,
+    buildGroupedSegmentsFromStackRow,
     buildLevelByCourseCategory,
     enrichDistributionWithPercent,
+    filterGenderBreakdownByCategory,
+    filterLevelBreakdownByCategory,
     formatCountWithPercent,
     formatPercent,
     levelByCategoryPdfRows,
@@ -78,6 +92,11 @@ const ANALYTICS_DEFAULT_FILTERS = {
 };
 
 const ANALYTICS_CHART_HEIGHT = 300;
+
+const ANALYTICS_EXPORT_FORMATS = {
+    tabular: 'tabular',
+    charts: 'charts',
+};
 
 function chartPercentTooltip(value, name, item) {
     const payload = item?.payload;
@@ -205,6 +224,10 @@ export default function AnalyticsPage() {
     const [partnersRaw, setPartnersRaw] = useState([]);
     const [programPartnerAssignmentIndex, setProgramPartnerAssignmentIndex] = useState({});
     const [filters, setFilters] = useState({ ...ANALYTICS_DEFAULT_FILTERS });
+    const [breakdownCategoryFilter, setBreakdownCategoryFilter] = useState('all');
+    const [analyticsExportFormat, setAnalyticsExportFormat] = useState(ANALYTICS_EXPORT_FORMATS.tabular);
+    const [isExportingPdf, setIsExportingPdf] = useState(false);
+    const exportRootRef = useRef(null);
     const [activeChartIndex, setActiveChartIndex] = useState(0);
     /** `all` = show every chart; otherwise a single chart id from chartCards */
     const [chartViewId, setChartViewId] = useState('all');
@@ -413,6 +436,55 @@ export default function AnalyticsPage() {
         () => buildGenderByCourseCategory(filteredEnrollmentRows, programById, { alreadyExpanded: true }),
         [filteredEnrollmentRows, programById],
     );
+    const breakdownCategoryOptions = useMemo(() => {
+        const keysInData = new Set([
+            ...levelByCategory.stackedChartData.map((r) => r.categoryKey),
+            ...genderByCategory.stackedChartData.map((r) => r.categoryKey),
+        ]);
+        const options = getCourseFilterSelectOptions().filter(
+            (opt) => opt.value === 'all' || keysInData.has(opt.value),
+        );
+        if (keysInData.has('_uncategorized')) {
+            options.push({ value: '_uncategorized', label: UNCATEGORIZED_COURSE_LABEL });
+        }
+        return options;
+    }, [levelByCategory.stackedChartData, genderByCategory.stackedChartData]);
+    const levelBreakdownView = useMemo(
+        () => filterLevelBreakdownByCategory(levelByCategory, breakdownCategoryFilter),
+        [levelByCategory, breakdownCategoryFilter],
+    );
+    const genderBreakdownView = useMemo(
+        () => filterGenderBreakdownByCategory(genderByCategory, breakdownCategoryFilter),
+        [genderByCategory, breakdownCategoryFilter],
+    );
+    const isBreakdownCategoryFiltered = breakdownCategoryFilter !== 'all';
+    const levelGroupedChartData = useMemo(
+        () => buildGroupedSegmentsFromStackRow(
+            levelBreakdownView.stackedChartData[0],
+            LEVEL_STACK_SERIES,
+            LEVEL_CHART_COLORS,
+        ),
+        [levelBreakdownView.stackedChartData],
+    );
+    const genderGroupedChartData = useMemo(
+        () => buildGroupedSegmentsFromStackRow(
+            genderBreakdownView.stackedChartData[0],
+            GENDER_STACK_SERIES,
+            GENDER_STACK_COLORS,
+        ),
+        [genderBreakdownView.stackedChartData],
+    );
+    useEffect(() => {
+        if (filters.course !== 'all')
+            setBreakdownCategoryFilter(filters.course);
+    }, [filters.course]);
+    useEffect(() => {
+        if (breakdownCategoryFilter === 'all')
+            return;
+        const stillValid = breakdownCategoryOptions.some((opt) => opt.value === breakdownCategoryFilter);
+        if (!stillValid)
+            setBreakdownCategoryFilter('all');
+    }, [breakdownCategoryFilter, breakdownCategoryOptions]);
     const years = useMemo(() => {
         const set = new Set();
         traineesRaw.forEach((t) => {
@@ -635,22 +707,112 @@ export default function AnalyticsPage() {
         }
     }, [chartCards.length, activeChartIndex]);
     const exportAnalyticsReport = async () => {
+        const programLabel = filters.programId === 'all'
+            ? COURSE_MODULE_LABELS.filterAll
+            : (programsRaw.find((p) => p.$id === filters.programId)?.title || filters.programId);
+        const trainingPartnerLabel = filters.trainingPartnerId === 'all'
+            ? 'All partners'
+            : (partnersRaw.find((p) => p.$id === filters.trainingPartnerId)?.name || filters.trainingPartnerId);
+        const yearLabel = filters.year === 'all' ? 'All years' : String(filters.year);
+        const genderLabel = filters.gender === 'all' ? 'All genders' : String(filters.gender);
+        const districtLabel = filters.district === 'all' ? 'All districts' : String(filters.district);
+        const courseLabel = filters.course === 'all' ? COURSE_MODULE_LABELS.filterAllCategories : getCourseLabel(filters.course);
+        const filterRows = [
+            ['Year', yearLabel],
+            [COURSE_MODULE_LABELS.reportFilterLabel, programLabel],
+            ['Course', courseLabel],
+            ['Training partner', trainingPartnerLabel],
+            ['Gender', genderLabel],
+            ['District', districtLabel],
+        ];
+        const downloadName = buildAnalyticsReportFilename(filters, {
+            programTitle: filters.programId === 'all' ? '' : programLabel,
+            trainingPartnerName: filters.trainingPartnerId === 'all' ? '' : trainingPartnerLabel,
+            courseLabel: filters.course === 'all' ? '' : courseLabel,
+            reportFormat: analyticsExportFormat,
+        });
+
+        if (analyticsExportFormat === ANALYTICS_EXPORT_FORMATS.charts) {
+            setIsExportingPdf(true);
+            const previousChartViewId = chartViewId;
+            try {
+                flushSync(() => setChartViewId('all'));
+                await new Promise((resolve) => setTimeout(resolve, 1200));
+                await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                const sectionElements = collectAnalyticsChartExportSections(
+                    null,
+                    exportRootRef.current ?? document,
+                );
+                if (sectionElements.length === 0) {
+                    throw new Error('No chart sections are available to export. Adjust filters or refresh the page.');
+                }
+                const enrollmentHint = stats.totalEnrollments !== stats.totalTrainees
+                    ? `${stats.totalEnrollments} enrollments`
+                    : 'Filter scope';
+                const summaryMetrics = [
+                    { label: 'Trainings', value: stats.trainingsConducted, accent: 'green' },
+                    {
+                        label: 'Currently enrolled',
+                        value: stats.currentlyEnrolledCount,
+                        hint: 'Not yet in training',
+                        pct: stats.totalEnrollments > 0
+                            ? `${formatPercent(stats.currentlyEnrolledCount, stats.totalEnrollments)} of enrollments`
+                            : null,
+                        accent: 'green-soft',
+                    },
+                    {
+                        label: 'In progress',
+                        value: stats.inProgressCount,
+                        hint: 'Active training',
+                        pct: stats.totalEnrollments > 0
+                            ? `${formatPercent(stats.inProgressCount, stats.totalEnrollments)} of enrollments`
+                            : null,
+                        accent: 'orange',
+                    },
+                    {
+                        label: 'Completed',
+                        value: stats.completedCount,
+                        pct: stats.totalEnrollments > 0
+                            ? `${formatPercent(stats.completedCount, stats.totalEnrollments)} of enrollments`
+                            : null,
+                        accent: 'green',
+                    },
+                    {
+                        label: 'Total trainees',
+                        value: stats.totalTrainees,
+                        hint: enrollmentHint,
+                        accent: 'orange-soft',
+                    },
+                    { label: 'Active partners', value: stats.activePartners, accent: 'green' },
+                    { label: 'Avg weeks', value: stats.avgTrainingWeeks, accent: 'orange' },
+                ];
+                await exportAnalyticsChartsPdf({
+                    filterRows,
+                    summaryMetrics,
+                    sectionElements,
+                    downloadName,
+                });
+                toast({
+                    title: 'Analytics PDF downloaded',
+                    description: 'Chart view exported as shown on the dashboard.',
+                });
+            }
+            catch (error) {
+                console.error('Analytics charts export failed:', error);
+                toast({
+                    title: 'Export failed',
+                    description: error instanceof Error ? error.message : 'Could not export analytics charts.',
+                    variant: 'destructive',
+                });
+            }
+            finally {
+                flushSync(() => setChartViewId(previousChartViewId));
+                setIsExportingPdf(false);
+            }
+            return;
+        }
+
         try {
-            const programLabel = filters.programId === 'all'
-                ? COURSE_MODULE_LABELS.filterAll
-                : (programsRaw.find((p) => p.$id === filters.programId)?.title || filters.programId);
-            const trainingPartnerLabel = filters.trainingPartnerId === 'all'
-                ? 'All partners'
-                : (partnersRaw.find((p) => p.$id === filters.trainingPartnerId)?.name || filters.trainingPartnerId);
-            const yearLabel = filters.year === 'all' ? 'All years' : String(filters.year);
-            const genderLabel = filters.gender === 'all' ? 'All genders' : String(filters.gender);
-            const districtLabel = filters.district === 'all' ? 'All districts' : String(filters.district);
-            const courseLabel = filters.course === 'all' ? COURSE_MODULE_LABELS.filterAllCategories : getCourseLabel(filters.course);
-            const downloadName = buildAnalyticsReportFilename(filters, {
-                programTitle: filters.programId === 'all' ? '' : programLabel,
-                trainingPartnerName: filters.trainingPartnerId === 'all' ? '' : trainingPartnerLabel,
-                courseLabel: filters.course === 'all' ? '' : courseLabel,
-            });
             const doc = new jsPDF('p', 'mm', 'a4');
             const pageW = doc.internal.pageSize.getWidth();
             const pageH = doc.internal.pageSize.getHeight();
@@ -717,14 +879,7 @@ export default function AnalyticsPage() {
                 ...tableBase,
                 startY: y,
                 head: [['Parameter', 'Value']],
-                body: [
-                    ['Year', yearLabel],
-                    [COURSE_MODULE_LABELS.reportFilterLabel, programLabel],
-                    ['Course', courseLabel],
-                    ['Training partner', trainingPartnerLabel],
-                    ['Gender', genderLabel],
-                    ['District', districtLabel],
-                ],
+                body: filterRows,
                 columnStyles: {
                     0: { cellWidth: contentW * 0.42, halign: 'left', fontStyle: 'bold', textColor: [71, 85, 105] },
                     1: { halign: 'right', textColor: [15, 23, 42] },
@@ -858,21 +1013,15 @@ export default function AnalyticsPage() {
                     1: { halign: 'right', fontStyle: 'bold', textColor: [15, 23, 42] },
                 },
             });
-            const totalPages = doc.internal.getNumberOfPages();
-            for (let i = 1; i <= totalPages; i++) {
-                doc.setPage(i);
-                doc.setDrawColor(226, 232, 240);
-                doc.setLineWidth(0.25);
-                doc.line(marginX, pageH - 14, pageW - marginX, pageH - 14);
-                doc.setFont('helvetica', 'normal');
-                doc.setFontSize(8);
-                doc.setTextColor(148, 163, 184);
-                doc.text('RETC Training Management', centerX, pageH - 9, { align: 'center' });
-                doc.text(`Page ${i} of ${totalPages}`, centerX, pageH - 5, { align: 'center' });
-            }
-            doc.save(downloadName);
+            appendAnalyticsPdfFooters(doc);
+            downloadPdfDocument(doc, downloadName);
+            toast({
+                title: 'Analytics PDF downloaded',
+                description: 'Tabular report exported successfully.',
+            });
         }
         catch (error) {
+            console.error('Analytics tabular export failed:', error);
             toast({
                 title: 'Export failed',
                 description: error instanceof Error ? error.message : 'Could not export analytics report.',
@@ -890,17 +1039,38 @@ export default function AnalyticsPage() {
         </div>
       </div>);
     }
-    return (<div className="space-y-4 p-4 sm:space-y-6 sm:p-6 lg:p-8">
+    return (<div ref={exportRootRef} className="space-y-4 p-4 sm:space-y-6 sm:p-6 lg:p-8">
       <div className="rounded-2xl border border-[#047857]/20 bg-gradient-to-r from-[#047857] via-[#0b8d68] to-[#ff8829] p-4 text-white shadow-[0_22px_45px_-24px_rgba(4,120,87,0.8)] sm:p-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
           <div className="min-w-0 max-w-full">
             <h1 className="text-2xl font-bold sm:text-3xl md:text-4xl">Analytics</h1>
             <p className="mt-2 text-sm text-white/90 sm:text-base">Training insights for courses, trainees, RETC facilitators, and participation trends</p>
           </div>
-          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
-            <Button onClick={exportAnalyticsReport} className="w-full bg-white text-[#047857] hover:bg-white/90 sm:w-auto">
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-end sm:justify-end">
+            <div className="w-full min-w-[200px] space-y-1.5 sm:w-auto">
+              <Label htmlFor="analytics-export-format" className="text-white/90">Report format</Label>
+              <Select
+                value={analyticsExportFormat}
+                onValueChange={setAnalyticsExportFormat}
+                disabled={isExportingPdf}
+              >
+                <SelectTrigger id="analytics-export-format" className="w-full border-white/30 bg-white/95 text-slate-900 sm:w-[220px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ANALYTICS_EXPORT_FORMATS.tabular}>Tabular (tables)</SelectItem>
+                  <SelectItem value={ANALYTICS_EXPORT_FORMATS.charts}>Analytics (charts)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              type="button"
+              onClick={() => { void exportAnalyticsReport(); }}
+              disabled={isExportingPdf}
+              className="w-full bg-white text-[#047857] hover:bg-white/90 sm:w-auto"
+            >
             <Download className="mr-2 h-4 w-4"/>
-            Download Analytics PDF
+            {isExportingPdf ? 'Preparing PDF…' : 'Download Analytics PDF'}
           </Button>
           <Button onClick={() => loadAnalyticsData('manual')} variant="outline" className="w-full border-white/80 bg-white/10 text-white hover:bg-white/20 sm:w-auto">
             <RefreshCcw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`}/>
@@ -973,165 +1143,174 @@ export default function AnalyticsPage() {
         })}
       </div>
       {(levelByCategory.grandTotal > 0 || genderByCategory.grandTotal > 0) && (
+        <div className="space-y-4">
+          <Card className="border-[#047857]/20 p-4 shadow-sm" data-analytics-export-hide>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Course category breakdown</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Filter by {COURSE_MODULE_LABELS.categoryFilterLabel.toLowerCase()} to see exact participant counts on the charts (including trainer level).
+                </p>
+              </div>
+              <div className="min-w-[220px] space-y-1.5">
+                <Label htmlFor="breakdown-category-filter">{COURSE_MODULE_LABELS.categoryFilterLabel}</Label>
+                <Select value={breakdownCategoryFilter} onValueChange={setBreakdownCategoryFilter}>
+                  <SelectTrigger id="breakdown-category-filter" className="w-full">
+                    <SelectValue placeholder={COURSE_MODULE_LABELS.filterAllCategories} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {breakdownCategoryOptions.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </Card>
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-      {levelByCategory.grandTotal > 0 && (<Card className="border-[#047857]/20 p-4 shadow-sm">
-          <div className="mb-4">
+      {levelBreakdownView.grandTotal > 0 && (<Card
+          className="border-[#047857]/20 p-4 shadow-sm"
+          data-analytics-export-chart
+          data-export-title="Participants by level and course category"
+        >
+          <div className="mb-4" data-analytics-export-pdf-hide>
             <h2 className="text-lg font-semibold text-gray-900">Participants by level and course category</h2>
             <p className="mt-1 text-sm text-slate-600">
-              One bar segment per course enrollment. Stacked bars show participant level within each {COURSE_MODULE_LABELS.categoryFilterLabel.toLowerCase()} (Y-axis: 0–100%).
+              {isBreakdownCategoryFiltered
+                ? `${levelBreakdownView.selectedCategory} — ${levelBreakdownView.grandTotal} participants. Counts and percentages are shown on each bar.`
+                : `Participant counts by level within each ${COURSE_MODULE_LABELS.categoryFilterLabel.toLowerCase()}. Select a category above to focus on one course.`}
             </p>
           </div>
-          <ResponsiveContainer width="100%" height={Math.max(260, levelByCategory.stackedChartData.length * 36)}>
-            <BarChart data={levelByCategory.stackedChartData} maxBarSize={56} margin={{ top: 8, right: 8, left: 4, bottom: 56 }}>
+          <ResponsiveContainer
+            width="100%"
+            height={isBreakdownCategoryFiltered
+                ? Math.max(300, levelGroupedChartData.length * 72)
+                : Math.max(280, levelBreakdownView.stackedChartData.length * 48)}
+          >
+            {isBreakdownCategoryFiltered ? (
+            <BarChart data={levelGroupedChartData} maxBarSize={72} margin={{ top: 28, right: 12, left: 4, bottom: 8 }}>
+              <CartesianGrid {...chartGridProps}/>
+              <XAxis dataKey="segment" tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
+              <YAxis allowDecimals={false} width={44} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
+              <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                {levelGroupedChartData.map((entry) => (
+                  <Cell key={entry.segment} fill={entry.fill}/>
+                ))}
+                <LabelList
+                  dataKey="chartLabel"
+                  position="top"
+                  fill="#334155"
+                  fontSize={12}
+                  fontWeight={700}
+                />
+              </Bar>
+            </BarChart>
+            ) : (
+            <BarChart data={levelBreakdownView.stackedChartData} maxBarSize={56} margin={{ top: 28, right: 8, left: 4, bottom: 56 }}>
               <CartesianGrid {...chartGridProps}/>
               <XAxis dataKey="category" interval={0} angle={-22} textAnchor="end" height={72} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
-              <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} width={44} allowDecimals={false} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
-              <Tooltip
-                contentStyle={chartTooltipStyle.contentStyle}
-                formatter={(value, name, item) => {
-                    const row = item?.payload;
-                    const dataKey = item?.dataKey;
-                    const countKeyByPct = {
-                        beginnerPct: 'beginner',
-                        technicianPct: 'technician',
-                        trainerPct: 'trainer',
-                        unspecifiedPct: 'unspecified',
-                    };
-                    const levelKey = countKeyByPct[dataKey];
-                    if (!row || !levelKey)
-                        return [value, name];
-                    const count = row[levelKey] ?? 0;
-                    const sharePct = Number(value) || 0;
-                    const allPct = formatPercent(count, levelByCategory.grandTotal, 1);
-                    return [`${count} (${sharePct.toFixed(1)}% of category, ${allPct} overall)`, name];
-                }}
-              />
+              <YAxis allowDecimals={false} width={44} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
               <Legend wrapperStyle={{ fontSize: 12, color: '#475569' }}/>
-              <Bar dataKey="beginnerPct" stackId="level" fill={LEVEL_CHART_COLORS.beginner} name="Beginner"/>
-              <Bar dataKey="technicianPct" stackId="level" fill={LEVEL_CHART_COLORS.technician} name="Technician"/>
-              <Bar dataKey="trainerPct" stackId="level" fill={LEVEL_CHART_COLORS.trainer} name="Trainer"/>
-              <Bar dataKey="unspecifiedPct" stackId="level" fill={LEVEL_CHART_COLORS.unspecified} name="Unspecified"/>
+              {LEVEL_STACK_SERIES.map(({ countKey, name }) => (
+                <Bar
+                  key={countKey}
+                  dataKey={countKey}
+                  stackId="level"
+                  fill={LEVEL_CHART_COLORS[countKey]}
+                  name={name}
+                >
+                  <LabelList
+                    dataKey={countKey}
+                    position="center"
+                    fill="#ffffff"
+                    fontSize={10}
+                    fontWeight={700}
+                    formatter={(_value, entry) => {
+                        const row = entry?.payload ?? entry;
+                        const count = row?.[countKey] ?? 0;
+                        if (count <= 0)
+                            return '';
+                        return formatCountWithPercent(count, row.total, 1);
+                    }}
+                  />
+                </Bar>
+              ))}
             </BarChart>
+            )}
           </ResponsiveContainer>
-          <div className="mt-6 overflow-x-auto rounded-xl border border-slate-200">
-            <table className="w-full min-w-[640px] text-left text-sm">
-              <thead className="bg-[#047857]/10 text-xs font-semibold uppercase tracking-wide text-[#047857]">
-                <tr>
-                  <th className="px-3 py-2.5">{COURSE_MODULE_LABELS.categoryFilterLabel}</th>
-                  <th className="px-3 py-2.5 text-right">Beginner</th>
-                  <th className="px-3 py-2.5 text-right">Technician</th>
-                  <th className="px-3 py-2.5 text-right">Trainer</th>
-                  <th className="px-3 py-2.5 text-right">Unspecified</th>
-                  <th className="px-3 py-2.5 text-right">Total</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {levelByCategory.tableRows.map((row) => (
-                  <tr key={row.category} className="hover:bg-slate-50/80">
-                    <td className="px-3 py-2.5 font-medium text-slate-800">{row.category}</td>
-                    <td className="px-3 py-2.5 text-right text-[#047857]">{formatCountWithPercent(row.beginner, row.total, 1)}</td>
-                    <td className="px-3 py-2.5 text-right text-[#ff8829]">{formatCountWithPercent(row.technician, row.total, 1)}</td>
-                    <td className="px-3 py-2.5 text-right text-[#0b8d68]">{formatCountWithPercent(row.trainer, row.total, 1)}</td>
-                    <td className="px-3 py-2.5 text-right text-slate-600">{formatCountWithPercent(row.unspecified, row.total, 1)}</td>
-                    <td className="px-3 py-2.5 text-right font-semibold text-slate-900">{formatCountWithPercent(row.total, levelByCategory.grandTotal, 1)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-3">
-            {levelByCategory.levelSummary.map((item) => (
-              <span
-                key={item.key}
-                className="rounded-full px-3 py-1 text-xs font-semibold"
-                style={{
-                    backgroundColor: `${LEVEL_CHART_COLORS[item.key] ?? LEVEL_CHART_COLORS.unspecified}22`,
-                    color: LEVEL_CHART_COLORS[item.key] ?? LEVEL_CHART_COLORS.unspecified,
-                    border: `1px solid ${LEVEL_CHART_COLORS[item.key] ?? LEVEL_CHART_COLORS.unspecified}55`,
-                }}
-              >
-                {item.label}: {formatCountWithPercent(item.count, levelByCategory.grandTotal, 1)}
-              </span>
-            ))}
-          </div>
         </Card>)}
-      {genderByCategory.grandTotal > 0 && (<Card className="border-[#047857]/20 p-4 shadow-sm xl:min-h-0">
-          <div className="mb-4">
+      {genderBreakdownView.grandTotal > 0 && (<Card
+          className="border-[#047857]/20 p-4 shadow-sm xl:min-h-0"
+          data-analytics-export-chart
+          data-export-title="Participants by gender and course category"
+        >
+          <div className="mb-4" data-analytics-export-pdf-hide>
             <h2 className="text-lg font-semibold text-gray-900">Participants by gender and course category</h2>
             <p className="mt-1 text-sm text-slate-600">
-              One bar segment per course enrollment. Stacked bars show gender within each {COURSE_MODULE_LABELS.categoryFilterLabel.toLowerCase()} (Y-axis: 0–100%).
+              {isBreakdownCategoryFiltered
+                ? `${genderBreakdownView.selectedCategory} — ${genderBreakdownView.grandTotal} participants. Counts and percentages are shown on each bar.`
+                : `Participant counts by gender within each ${COURSE_MODULE_LABELS.categoryFilterLabel.toLowerCase()}. Select a category above to focus on one course.`}
             </p>
           </div>
-          <ResponsiveContainer width="100%" height={Math.max(260, genderByCategory.stackedChartData.length * 36)}>
-            <BarChart data={genderByCategory.stackedChartData} maxBarSize={56} margin={{ top: 8, right: 8, left: 4, bottom: 56 }}>
+          <ResponsiveContainer
+            width="100%"
+            height={isBreakdownCategoryFiltered
+                ? Math.max(300, genderGroupedChartData.length * 72)
+                : Math.max(280, genderBreakdownView.stackedChartData.length * 48)}
+          >
+            {isBreakdownCategoryFiltered ? (
+            <BarChart data={genderGroupedChartData} maxBarSize={72} margin={{ top: 28, right: 12, left: 4, bottom: 8 }}>
+              <CartesianGrid {...chartGridProps}/>
+              <XAxis dataKey="segment" tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
+              <YAxis allowDecimals={false} width={44} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
+              <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                {genderGroupedChartData.map((entry) => (
+                  <Cell key={entry.segment} fill={entry.fill}/>
+                ))}
+                <LabelList
+                  dataKey="chartLabel"
+                  position="top"
+                  fill="#334155"
+                  fontSize={12}
+                  fontWeight={700}
+                />
+              </Bar>
+            </BarChart>
+            ) : (
+            <BarChart data={genderBreakdownView.stackedChartData} maxBarSize={56} margin={{ top: 28, right: 8, left: 4, bottom: 56 }}>
               <CartesianGrid {...chartGridProps}/>
               <XAxis dataKey="category" interval={0} angle={-22} textAnchor="end" height={72} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
-              <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} width={44} allowDecimals={false} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
-              <Tooltip
-                contentStyle={chartTooltipStyle.contentStyle}
-                formatter={(value, name, item) => {
-                    const row = item?.payload;
-                    const dataKey = item?.dataKey;
-                    const countKeyByPct = {
-                        malePct: 'male',
-                        femalePct: 'female',
-                        otherPct: 'other',
-                    };
-                    const genderKey = countKeyByPct[dataKey];
-                    if (!row || !genderKey)
-                        return [value, name];
-                    const count = row[genderKey] ?? 0;
-                    const sharePct = Number(value) || 0;
-                    const allPct = formatPercent(count, genderByCategory.grandTotal, 1);
-                    return [`${count} (${sharePct.toFixed(1)}% of category, ${allPct} overall)`, name];
-                }}
-              />
+              <YAxis allowDecimals={false} width={44} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
               <Legend wrapperStyle={{ fontSize: 12, color: '#475569' }}/>
-              <Bar dataKey="malePct" stackId="gender" fill={GENDER_STACK_COLORS.male} name="Male"/>
-              <Bar dataKey="femalePct" stackId="gender" fill={GENDER_STACK_COLORS.female} name="Female"/>
-              <Bar dataKey="otherPct" stackId="gender" fill={GENDER_STACK_COLORS.other} name="Other"/>
+              {GENDER_STACK_SERIES.map(({ countKey, name }) => (
+                <Bar
+                  key={countKey}
+                  dataKey={countKey}
+                  stackId="gender"
+                  fill={GENDER_STACK_COLORS[countKey]}
+                  name={name}
+                >
+                  <LabelList
+                    dataKey={countKey}
+                    position="center"
+                    fill="#ffffff"
+                    fontSize={10}
+                    fontWeight={700}
+                    formatter={(_value, entry) => {
+                        const row = entry?.payload ?? entry;
+                        const count = row?.[countKey] ?? 0;
+                        if (count <= 0)
+                            return '';
+                        return formatCountWithPercent(count, row.total, 1);
+                    }}
+                  />
+                </Bar>
+              ))}
             </BarChart>
+            )}
           </ResponsiveContainer>
-          <div className="mt-6 overflow-x-auto rounded-xl border border-slate-200">
-            <table className="w-full min-w-[520px] text-left text-sm">
-              <thead className="bg-[#047857]/10 text-xs font-semibold uppercase tracking-wide text-[#047857]">
-                <tr>
-                  <th className="px-3 py-2.5">{COURSE_MODULE_LABELS.categoryFilterLabel}</th>
-                  <th className="px-3 py-2.5 text-right">Male</th>
-                  <th className="px-3 py-2.5 text-right">Female</th>
-                  <th className="px-3 py-2.5 text-right">Other</th>
-                  <th className="px-3 py-2.5 text-right">Total</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {genderByCategory.tableRows.map((row) => (
-                  <tr key={row.category} className="hover:bg-slate-50/80">
-                    <td className="px-3 py-2.5 font-medium text-slate-800">{row.category}</td>
-                    <td className="px-3 py-2.5 text-right text-[#047857]">{formatCountWithPercent(row.male, row.total, 1)}</td>
-                    <td className="px-3 py-2.5 text-right text-[#ff8829]">{formatCountWithPercent(row.female, row.total, 1)}</td>
-                    <td className="px-3 py-2.5 text-right text-slate-600">{formatCountWithPercent(row.other, row.total, 1)}</td>
-                    <td className="px-3 py-2.5 text-right font-semibold text-slate-900">{formatCountWithPercent(row.total, genderByCategory.grandTotal, 1)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-3">
-            {genderByCategory.genderSummary.map((item) => (
-              <span
-                key={item.key}
-                className="rounded-full px-3 py-1 text-xs font-semibold"
-                style={{
-                    backgroundColor: `${GENDER_STACK_COLORS[item.key] ?? GENDER_STACK_COLORS.other}22`,
-                    color: GENDER_STACK_COLORS[item.key] ?? GENDER_STACK_COLORS.other,
-                    border: `1px solid ${GENDER_STACK_COLORS[item.key] ?? GENDER_STACK_COLORS.other}55`,
-                }}
-              >
-                {item.label}: {formatCountWithPercent(item.count, genderByCategory.grandTotal, 1)}
-              </span>
-            ))}
-          </div>
         </Card>)}
+        </div>
         </div>
       )}
       {chartCards.length > 0 && (<Card className="border-[#047857]/20 p-4 shadow-sm">
@@ -1141,7 +1320,7 @@ export default function AnalyticsPage() {
               Charts use the <span className="font-medium">Analytics filters</span> above (choose <span className="font-medium">All …</span> on any field for the full dataset). Pick <span className="font-medium">All charts</span> to see every chart at once.
             </p>
           </div>
-          <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div data-analytics-export-hide className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div className="flex w-full flex-col gap-2 sm:max-w-md">
               <Label htmlFor="analytics-chart-select">Chart view</Label>
               <Select
@@ -1182,14 +1361,22 @@ export default function AnalyticsPage() {
               </div>
             )}
           </div>
+          <div>
           {chartViewId === 'all' ? (
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
               {chartCards.map((chart) => (
-                <div key={chart.id} className="rounded-lg border border-slate-200 bg-slate-50/40 p-3">
+                <div
+                  key={chart.id}
+                  className="rounded-lg border border-slate-200 bg-slate-50/40 p-3"
+                  data-analytics-export-chart
+                  data-export-title={chart.title}
+                >
+                  <div data-analytics-export-pdf-hide>
                   <h3 className="text-base font-semibold text-slate-900">{chart.title}</h3>
                   {chart.description && (
                     <p className="mt-0.5 text-sm text-slate-600">{chart.description}</p>
                   )}
+                  </div>
                   <div className="mt-3 min-h-[280px] w-full">{chart.element}</div>
                 </div>
               ))}
@@ -1207,6 +1394,7 @@ export default function AnalyticsPage() {
               </div>
             </>
           )}
+          </div>
         </Card>)}
     </div>);
 }

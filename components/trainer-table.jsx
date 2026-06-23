@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { useClientPagination } from '@/hooks/use-client-pagination';
 import { TablePaginationFooter } from '@/components/table-pagination-footer';
 import { getRetcFacilitatorRoleLabel, RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
+import { formatSpecializationsDisplay } from '@/lib/trainer-specializations';
 export function TrainerTable({ trainers, isLoading, onEdit, onDelete, isAdmin, paginationResetKey = '', }) {
     const pagination = useClientPagination(trainers, { resetKey: paginationResetKey });
     if (isLoading) {
@@ -39,7 +40,7 @@ export function TrainerTable({ trainers, isLoading, onEdit, onDelete, isAdmin, p
           {pagedItems.map((trainer) => (<tr key={trainer.$id} className="transition-colors hover:bg-gradient-to-r hover:from-[#047857]/[0.04] hover:to-[#ff8829]/[0.06]">
               <td className="px-3 py-3 text-sm font-medium text-gray-900 sm:px-4 sm:py-4">{trainer.name}</td>
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.years_of_experience}</td>
-              <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.specialization || '-'}</td>
+              <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{formatSpecializationsDisplay(trainer) || '-'}</td>
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.training_partner || trainer.trainingPartner || trainer['training-partners'] || trainer.training_partners || trainer.organization || '-'}</td>
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{getRetcFacilitatorRoleLabel(trainer.role)}</td>
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.email || '-'}</td>

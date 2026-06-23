@@ -5,16 +5,21 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
+import { getCourseFormSelectOptions } from '@/lib/renewable-energy-courses';
+import { getSpecializationsFromTrainer } from '@/lib/trainer-specializations';
 import { getRetcFacilitatorRoleLabel, RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
+
 export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = [], isPartnersLoading = false, }) {
     const [isLoading, setIsLoading] = useState(false);
     const [submitError, setSubmitError] = useState('');
     const [currentStep, setCurrentStep] = useState(1);
     const totalSteps = 2;
+    const specializationOptions = getCourseFormSelectOptions();
     const [formData, setFormData] = useState({
         name: '',
         years_of_experience: '',
-        specialization: '',
+        specializations: [],
         training_partner: '',
         role: 'trainer',
         email: '',
@@ -41,7 +46,7 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
             setFormData({
                 name: trainer.name || '',
                 years_of_experience: String(trainer.years_of_experience ?? ''),
-                specialization: trainer.specialization || '',
+                specializations: getSpecializationsFromTrainer(trainer),
                 training_partner: trainer.training_partner || trainer.trainingPartner || trainer['training-partners'] || trainer.training_partners || trainer.organization || '',
                 role: trainer.role || 'trainer',
                 email: trainer.email || '',
@@ -53,7 +58,7 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
             setFormData({
                 name: '',
                 years_of_experience: '',
-                specialization: '',
+                specializations: [],
                 training_partner: '',
                 role: 'trainer',
                 email: '',
@@ -70,6 +75,9 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
             const years = Number(formData.years_of_experience);
             if (!Number.isInteger(years) || years < 0) {
                 return 'Years of experience must be a non-negative whole number.';
+            }
+            if (!Array.isArray(formData.specializations) || formData.specializations.length === 0) {
+                return 'Select at least one specialization.';
             }
             if (!String(formData.training_partner || '').trim()) {
                 return 'Training partner is required.';
@@ -96,6 +104,7 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
             await onSave({
                 ...formData,
                 years_of_experience: years,
+                specializations: formData.specializations,
             });
         }
         catch (error) {
@@ -108,6 +117,16 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
     };
     const handleChange = (field, value) => {
         setFormData(prev => ({ ...prev, [field]: value }));
+    };
+    const toggleSpecialization = (courseKey, checked) => {
+        setFormData((prev) => {
+            const current = new Set(prev.specializations || []);
+            if (checked)
+                current.add(courseKey);
+            else
+                current.delete(courseKey);
+            return { ...prev, specializations: Array.from(current) };
+        });
     };
     const handleNext = () => {
         const validationError = validateStep(currentStep);
@@ -176,9 +195,23 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
             <Input id="years_of_experience" type="number" min="0" value={formData.years_of_experience} onChange={(e) => handleChange('years_of_experience', e.target.value)} placeholder="e.g., 5" disabled={isLoading}/>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="specialization">Specialization</Label>
-            <Input id="specialization" value={formData.specialization} onChange={(e) => handleChange('specialization', e.target.value)} placeholder="e.g., Solar PV" disabled={isLoading}/>
+          <div className="space-y-3">
+            <div>
+              <Label>Specializations *</Label>
+              <p className="mt-0.5 text-xs text-slate-500">Select all areas this facilitator can deliver (one or more).</p>
+            </div>
+            <div className="max-h-44 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3">
+              {specializationOptions.map((opt) => (
+                <label key={opt.value} className="flex items-center gap-2 text-sm text-slate-700">
+                  <Checkbox
+                    checked={(formData.specializations || []).includes(opt.value)}
+                    onCheckedChange={(checked) => toggleSpecialization(opt.value, checked === true)}
+                    disabled={isLoading}
+                  />
+                  <span>{opt.label}</span>
+                </label>
+              ))}
+            </div>
           </div>
 
           <div className="space-y-2">
