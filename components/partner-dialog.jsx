@@ -3,6 +3,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PhoneNumberInput } from '@/components/phone-input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { PARTNER_LABELS } from '@/lib/partner-labels';
@@ -149,7 +150,7 @@ export function PartnerDialog({ open, onOpenChange, partner, onSave }) {
           </div>
           <div className="space-y-2">
             <Label htmlFor="partner_phone">Phone</Label>
-            <Input id="partner_phone" value={formData.phone} onChange={(e) => handleChange('phone', e.target.value)} placeholder="+256..." disabled={isLoading}/>
+            <PhoneNumberInput id="partner_phone" value={formData.phone} onChange={(phone) => handleChange('phone', phone)} disabled={isLoading}/>
           </div>
           <div className="space-y-2">
             <Label>Status</Label>

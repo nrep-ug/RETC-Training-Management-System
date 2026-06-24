@@ -15,6 +15,7 @@ import { toast } from '@/hooks/use-toast';
 import { PartnerDialog } from '@/components/partner-dialog';
 import { PartnerTable } from '@/components/partner-table';
 import { PARTNER_LABELS } from '@/lib/partner-labels';
+import { assertValidPhone, isCompletePhone } from '@/lib/phone';
 function documentStableId(doc) {
     if (!doc)
         return '';
@@ -29,8 +30,11 @@ function sanitizePartnerPayload(data) {
             const trimmed = value.trim();
             if (!trimmed)
                 return;
-            if (key === 'phone' && trimmed.replace(/\s+/g, '').length > 12) {
-                throw new Error('Partner phone must be a string with at most 12 characters.');
+            if (key === 'phone') {
+                if (!isCompletePhone(trimmed))
+                    return;
+                cleaned[key] = assertValidPhone(trimmed, 'Partner phone');
+                return;
             }
             cleaned[key] = key === 'email' ? trimmed.toLowerCase() : trimmed;
             return;
