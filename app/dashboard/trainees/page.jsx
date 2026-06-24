@@ -23,6 +23,7 @@ import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
 import { getCourseFilterSelectOptions, getCourseKeyFromProgram, getTraineeCourseLabel, traineeMatchesCourseFilter, } from '@/lib/renewable-energy-courses';
 import { assertValidTraineeLevel, enrichTraineeWithLevel, getTraineeLevelFilterSelectOptions, getTraineeLevelFromDoc, getTraineeLevelLabel, traineeMatchesLevelFilter, } from '@/lib/trainee-levels';
 import { buildTrainerNameById, getTrainerIdFromProgram, resolveTrainerDisplayName, } from '@/lib/program-trainer';
+import { assertValidPhone, isCompletePhone, phonesAreEquivalent } from '@/lib/phone';
 import {
     buildEnrollmentsByTrainee,
     buildTraineeAfterCourseRemoval,
@@ -75,19 +76,15 @@ function sanitizeTraineePayload(data) {
             if (trimmed === '')
                 return;
             if (key === 'phone') {
-                const normalized = trimmed.replace(/\s+/g, '');
-                if (normalized.length > 12) {
-                    throw new Error('Phone must be a string with at most 12 characters.');
-                }
-                cleaned[key] = normalized;
+                if (!isCompletePhone(trimmed))
+                    return;
+                cleaned[key] = assertValidPhone(trimmed, 'Phone');
                 return;
             }
             if (key === 'next_of_kin_phone') {
-                const normalized = trimmed.replace(/\s+/g, '');
-                if (normalized.length > 12) {
-                    throw new Error('Next of kin phone must be a string with at most 12 characters.');
-                }
-                cleaned[key] = normalized;
+                if (!isCompletePhone(trimmed))
+                    return;
+                cleaned[key] = assertValidPhone(trimmed, 'Next of kin phone');
                 return;
             }
             if (key === 'gender') {
@@ -595,7 +592,7 @@ export default function TraineesPage() {
                 const sameEmail = normalizedEmail &&
                     String(t.email || '').trim().toLowerCase() === normalizedEmail;
                 const samePhone = normalizedPhone &&
-                    String(t.phone || '').trim() === normalizedPhone;
+                    phonesAreEquivalent(t.phone, normalizedPhone);
                 return sameEmail || samePhone;
             });
             if (!selectedTrainee && existingPerson && traineeAlreadyOnProgram(existingPerson, program_id, enrollmentRows)) {

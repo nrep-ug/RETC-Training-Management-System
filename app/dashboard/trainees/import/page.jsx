@@ -12,6 +12,7 @@ import { AlertCircle, Upload } from 'lucide-react';
 import Link from 'next/link';
 import { useClientPagination } from '@/hooks/use-client-pagination';
 import { TablePaginationFooter } from '@/components/table-pagination-footer';
+import { assertValidPhone, isCompletePhone } from '@/lib/phone';
 
 function ImportErrorsTable({ errors, resetKey }) {
     const { pagedItems, page, setPage, pageSize, setPageSize, total, totalPages, rangeFrom, rangeTo, } = useClientPagination(errors, { resetKey });
@@ -144,12 +145,8 @@ export default function ImportTraineesPage() {
                         name: row.name,
                         status: TraineeStatus.ENROLLED,
                     };
-                    if (row.phone) {
-                        const normalizedPhone = row.phone.trim().replace(/\s+/g, '');
-                        if (normalizedPhone.length > 12) {
-                            throw new Error('Phone must be at most 12 characters.');
-                        }
-                        traineePayload.phone = normalizedPhone;
+                    if (row.phone && isCompletePhone(row.phone)) {
+                        traineePayload.phone = assertValidPhone(row.phone, 'Phone');
                     }
                     if (row.gender)
                     {
@@ -180,12 +177,8 @@ export default function ImportTraineesPage() {
                         traineePayload.trainee_level = importLevel;
                     if (row.next_of_kin_name)
                         traineePayload.next_of_kin_name = row.next_of_kin_name;
-                    if (row.next_of_kin_phone) {
-                        const normalizedKinPhone = row.next_of_kin_phone.trim().replace(/\s+/g, '');
-                        if (normalizedKinPhone.length > 12) {
-                            throw new Error('Next of kin phone must be at most 12 characters.');
-                        }
-                        traineePayload.next_of_kin_phone = normalizedKinPhone;
+                    if (row.next_of_kin_phone && isCompletePhone(row.next_of_kin_phone)) {
+                        traineePayload.next_of_kin_phone = assertValidPhone(row.next_of_kin_phone, 'Next of kin phone');
                     }
                     if (row.consent_given) {
                         const consentValue = String(row.consent_given).trim().toLowerCase();
@@ -344,8 +337,8 @@ export default function ImportTraineesPage() {
             <p className="font-medium mb-1">Requirements:</p>
             <ul className="list-disc list-inside space-y-1">
               <li>CSV requires email and name; supports program_id, next_of_kin_name, next_of_kin_phone, consent_given, and consent_date</li>
-              <li>Phone must be a string and no longer than 12 characters</li>
-              <li>Next of kin phone must be no longer than 12 characters</li>
+              <li>Phone: international format with country code (e.g. +256712345678, +447911123456)</li>
+              <li>Next of kin phone uses the same international format</li>
               <li>Gender values must be Male or Female</li>
               <li>Existing emails with a program_id are enrolled in that course (no duplicate person)</li>
               <li>All trainees will be created with &apos;Currently Enrolled&apos; status</li>

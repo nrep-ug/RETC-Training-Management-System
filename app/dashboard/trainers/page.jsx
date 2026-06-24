@@ -19,6 +19,7 @@ import {
     normalizeSpecializationKeys,
     trainerMatchesSpecializationQuery,
 } from '@/lib/trainer-specializations';
+import { assertValidPhone, isCompletePhone, phonesAreEquivalent } from '@/lib/phone';
 function documentStableId(doc) {
     if (!doc)
         return '';
@@ -34,11 +35,9 @@ function sanitizeTrainerPayload(data) {
             if (trimmed === '')
                 return;
             if (key === 'phone') {
-                const normalized = trimmed.replace(/\s+/g, '');
-                if (normalized.length > 12) {
-                    throw new Error('Phone must be a string with at most 12 characters.');
-                }
-                cleaned[key] = normalized;
+                if (!isCompletePhone(trimmed))
+                    return;
+                cleaned[key] = assertValidPhone(trimmed, 'Phone');
                 return;
             }
             if (key === 'email') {
@@ -239,7 +238,7 @@ export default function TrainersPage() {
                 if (selectedTrainer && documentStableId(trainer) === selectedId)
                     return false;
                 const emailMatch = normalizedEmail && String(trainer.email || '').trim().toLowerCase() === normalizedEmail;
-                const phoneMatch = normalizedPhone && String(trainer.phone || '').trim() === normalizedPhone;
+                const phoneMatch = normalizedPhone && phonesAreEquivalent(trainer.phone, normalizedPhone);
                 return emailMatch || phoneMatch;
             });
             if (duplicate) {

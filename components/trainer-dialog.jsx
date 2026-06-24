@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PhoneNumberInput } from '@/components/phone-input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -264,7 +265,7 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
 
           <div className="space-y-2">
             <Label htmlFor="phone">Phone</Label>
-            <Input id="phone" value={formData.phone} onChange={(e) => handleChange('phone', e.target.value)} placeholder="+256..." disabled={isLoading}/>
+            <PhoneNumberInput id="phone" value={formData.phone} onChange={(phone) => handleChange('phone', phone)} disabled={isLoading}/>
           </div>
           </>)}
 

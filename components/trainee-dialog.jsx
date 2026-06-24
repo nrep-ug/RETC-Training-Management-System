@@ -10,6 +10,7 @@ import { getTraineeLevelFormSelectOptions, getTraineeLevelLabel } from '@/lib/tr
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PhoneNumberInput } from '@/components/phone-input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, } from '@/components/ui/select';
 import { COURSE_MODULE_LABELS } from '@/lib/course-module-labels';
@@ -242,7 +243,7 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
 
           <div className="space-y-2">
             <Label htmlFor="phone">Phone Number</Label>
-            <Input id="phone" value={formData.phone} onChange={(e) => handleChange('phone', e.target.value)} placeholder="+1234567890" disabled={isLoading}/>
+            <PhoneNumberInput id="phone" value={formData.phone} onChange={(phone) => handleChange('phone', phone)} disabled={isLoading}/>
           </div>
           </>)}
 
@@ -379,7 +380,7 @@ export function TraineeDialog({ open, onOpenChange, trainee, onSave, programs = 
           </div>
           <div className="space-y-2">
             <Label htmlFor="next_of_kin_phone">Next of Kin Phone</Label>
-            <Input id="next_of_kin_phone" value={formData.next_of_kin_phone} onChange={(e) => handleChange('next_of_kin_phone', e.target.value)} placeholder="+256..." disabled={isLoading}/>
+            <PhoneNumberInput id="next_of_kin_phone" value={formData.next_of_kin_phone} onChange={(phone) => handleChange('next_of_kin_phone', phone)} disabled={isLoading}/>
           </div>
           <div className="space-y-2">
             <Label htmlFor="consent_given">Data Consent</Label>
