@@ -1,12 +1,92 @@
 'use client';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Pencil, Trash2, Eye } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 import { useClientPagination } from '@/hooks/use-client-pagination';
 import { TablePaginationFooter } from '@/components/table-pagination-footer';
 import { getRetcFacilitatorRoleLabel, RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
 import { formatSpecializationsDisplay } from '@/lib/trainer-specializations';
+import { formatTechnologySelectionsDisplay } from '@/lib/trainer-technologies';
+import {
+    getTrainerOptionalEmail,
+    getTrainerOptionalPhone,
+    TRAINER_OPTIONAL_EMAIL_KEY,
+    TRAINER_OPTIONAL_PHONE_KEY,
+} from '@/lib/trainer-contact-fields';
+
+function getTrainerPartnerName(trainer) {
+    return trainer.training_partner
+        || trainer.trainingPartner
+        || trainer['training-partners']
+        || trainer.training_partners
+        || trainer.organization
+        || '';
+}
+
+function DetailField({ label, value, className = '' }) {
+    return (
+        <div className={cn('rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5', className)}>
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
+            <p className="mt-1 break-words text-sm font-semibold text-slate-800">{value || '—'}</p>
+        </div>
+    );
+}
+
+function TrainerDetailView({ trainer }) {
+    const partner = getTrainerPartnerName(trainer);
+    const specializations = formatSpecializationsDisplay(trainer);
+    const technologies = formatTechnologySelectionsDisplay(trainer);
+    return (
+        <div className="space-y-5 bg-gradient-to-b from-white via-white to-[#f7faf8] px-6 py-5">
+            <div className="rounded-xl border border-[#047857]/20 bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                            {RETC_FACILITATOR_LABELS.moduleSingular}
+                        </p>
+                        <h3 className="mt-1 text-lg font-bold text-slate-900">{trainer.name || '—'}</h3>
+                        <p className="mt-1 text-sm text-slate-600">{getRetcFacilitatorRoleLabel(trainer.role)}</p>
+                    </div>
+                    <Badge
+                        variant={trainer.status === 'active' ? 'default' : 'secondary'}
+                        className="shrink-0 capitalize"
+                    >
+                        {trainer.status || '—'}
+                    </Badge>
+                </div>
+            </div>
+
+            <div className="rounded-xl border border-[#047857]/15 bg-white p-4 shadow-sm">
+                <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#047857]">Contact</p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <DetailField label="Primary email" value={trainer.email} />
+                    <DetailField label="Additional email" value={trainer[TRAINER_OPTIONAL_EMAIL_KEY] || getTrainerOptionalEmail(trainer)} />
+                    <DetailField label="Primary phone" value={trainer.phone} />
+                    <DetailField label="Additional contact" value={getTrainerOptionalPhone(trainer)} />
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="rounded-xl border border-[#ff8829]/25 bg-white p-4 shadow-sm sm:col-span-2">
+                    <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#b45309]">Professional profile</p>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <DetailField label="Training partner" value={partner} />
+                        <DetailField label="Years of experience" value={trainer.years_of_experience} />
+                        <DetailField label="Categories" value={specializations} className="sm:col-span-2" />
+                        <DetailField label="Technologies" value={technologies} className="sm:col-span-2" />
+                    </div>
+                </div>
+                <DetailField label="Record ID" value={trainer.$id} className="font-mono text-xs sm:col-span-2" />
+            </div>
+        </div>
+    );
+}
+
 export function TrainerTable({ trainers, isLoading, onEdit, onDelete, isAdmin, paginationResetKey = '', }) {
+    const [viewTrainer, setViewTrainer] = useState(null);
     const pagination = useClientPagination(trainers, { resetKey: paginationResetKey });
     if (isLoading) {
         return (<div className="p-8 text-center">
@@ -22,46 +102,68 @@ export function TrainerTable({ trainers, isLoading, onEdit, onDelete, isAdmin, p
     const { pagedItems, page, setPage, pageSize, setPageSize, total, totalPages, rangeFrom, rangeTo, } = pagination;
     return (<div className="overflow-hidden rounded-2xl border border-[#047857]/15 bg-gradient-to-br from-white via-white to-[#047857]/[0.03] shadow-sm">
       <div className="overflow-x-auto">
-      <table className="w-full min-w-[900px]">
+      <table className="w-full min-w-[640px]">
         <thead className="border-b border-[#047857]/15 bg-gradient-to-r from-[#047857]/10 via-[#047857]/5 to-[#ff8829]/10">
           <tr>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Name</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Experience</th>
-            <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Specialization</th>
+            <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Categories</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Partner</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Role</th>
-            <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Email</th>
-            <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Phone</th>
             <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Status</th>
-            {isAdmin && <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Actions</th>}
+            <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-[#1f2937] sm:px-4 sm:py-3">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-[#047857]/10">
           {pagedItems.map((trainer) => (<tr key={trainer.$id} className="transition-colors hover:bg-gradient-to-r hover:from-[#047857]/[0.04] hover:to-[#ff8829]/[0.06]">
               <td className="px-3 py-3 text-sm font-medium text-gray-900 sm:px-4 sm:py-4">{trainer.name}</td>
-              <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.years_of_experience}</td>
-              <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{formatSpecializationsDisplay(trainer) || '-'}</td>
-              <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.training_partner || trainer.trainingPartner || trainer['training-partners'] || trainer.training_partners || trainer.organization || '-'}</td>
+              <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.years_of_experience ?? '—'}</td>
+              <td className="max-w-[200px] truncate px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4" title={formatSpecializationsDisplay(trainer)}>
+                {formatSpecializationsDisplay(trainer) || '—'}
+              </td>
+              <td className="max-w-[160px] truncate px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4" title={getTrainerPartnerName(trainer)}>
+                {getTrainerPartnerName(trainer) || '—'}
+              </td>
               <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{getRetcFacilitatorRoleLabel(trainer.role)}</td>
-              <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.email || '-'}</td>
-              <td className="px-3 py-3 text-sm text-gray-600 sm:px-4 sm:py-4">{trainer.phone || '-'}</td>
               <td className="px-3 py-3 text-sm sm:px-4 sm:py-4">
                 <Badge variant={trainer.status === 'active' ? 'default' : 'secondary'} className="capitalize">
                   {trainer.status}
                 </Badge>
               </td>
-              {isAdmin && (<td className="space-x-2 px-3 py-3 text-sm sm:px-4 sm:py-4">
-                  <Button size="sm" variant="outline" onClick={() => onEdit?.(trainer)}>
+              <td className="space-x-2 px-3 py-3 text-sm sm:px-4 sm:py-4">
+                  <Button size="sm" variant="outline" onClick={() => setViewTrainer(trainer)} title="View full details">
+                    <Eye className="h-4 w-4"/>
+                  </Button>
+                  {isAdmin && (<>
+                  <Button size="sm" variant="outline" onClick={() => onEdit?.(trainer)} title="Edit">
                     <Pencil className="h-4 w-4"/>
                   </Button>
-                  <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700" onClick={() => onDelete?.(trainer.$id)}>
+                  <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700" onClick={() => onDelete?.(trainer.$id)} title="Delete">
                     <Trash2 className="h-4 w-4"/>
                   </Button>
-                </td>)}
+                  </>)}
+                </td>
             </tr>))}
         </tbody>
       </table>
       </div>
       <TablePaginationFooter total={total} page={page} pageSize={pageSize} totalPages={totalPages} rangeFrom={rangeFrom} rangeTo={rangeTo} onPageChange={setPage} onPageSizeChange={setPageSize}/>
+
+      <Dialog
+        open={!!viewTrainer}
+        onOpenChange={(open) => {
+            if (!open)
+                setViewTrainer(null);
+        }}
+      >
+        <DialogContent className="max-h-[90dvh] w-[calc(100vw-1.5rem)] max-w-2xl overflow-y-auto border-[#047857]/25 p-0 sm:w-full">
+          <DialogHeader className="border-b border-[#047857]/15 bg-gradient-to-r from-[#047857] via-[#0b8d68] to-[#ff8829] px-6 py-4">
+            <DialogTitle className="text-xl font-bold text-white">
+              {RETC_FACILITATOR_LABELS.moduleSingular} profile
+            </DialogTitle>
+          </DialogHeader>
+          {viewTrainer && <TrainerDetailView trainer={viewTrainer} />}
+        </DialogContent>
+      </Dialog>
     </div>);
 }

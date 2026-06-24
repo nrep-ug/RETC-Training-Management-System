@@ -15,76 +15,126 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast } from '@/hooks/use-toast';
 import { getRetcFacilitatorRoleLabel, RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
 import {
-    buildSpecializationWriteVariants,
+    formatSpecializationForAppwrite,
     normalizeSpecializationKeys,
     trainerMatchesSpecializationQuery,
 } from '@/lib/trainer-specializations';
-import { assertValidPhone, isCompletePhone, phonesAreEquivalent } from '@/lib/phone';
+import {
+    assertTechnologySelectionsForCategories,
+    buildTechnologyWritePayload,
+    getTechnologySelectionsFromTrainer,
+    technologySelectionsFromInputs,
+    trainerMatchesTechnologyQuery,
+} from '@/lib/trainer-technologies';
+import { phonesAreEquivalent } from '@/lib/phone';
+import {
+    findFacilitatorContactDuplicate,
+    buildTrainerContactWriteFields,
+    TRAINER_OPTIONAL_EMAIL_KEY,
+    TRAINER_OPTIONAL_PHONE_KEY,
+} from '@/lib/trainer-contact-fields';
+
 function documentStableId(doc) {
     if (!doc)
         return '';
     return String(doc.$id ?? doc.documentId ?? doc.id ?? '').trim();
 }
-function sanitizeTrainerPayload(data) {
+
+function sanitizeOptionalEmail(value, fieldLabel) {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) {
+        return '';
+    }
+    if (!trimmed.includes('@')) {
+        throw new Error(`Please enter a valid ${fieldLabel.toLowerCase()}.`);
+    }
+    return trimmed.toLowerCase();
+}
+
+function sanitizeTrainerPayload(data, { isEdit = false, existingTrainer = null } = {}) {
     const cleaned = {};
+    const formOnlyKeys = new Set(['technology_inputs', 'technology_selections']);
     Object.entries(data).forEach(([key, value]) => {
+        if (formOnlyKeys.has(key))
+            return;
         if (value === undefined || value === null)
             return;
         if (typeof value === 'string') {
             const trimmed = value.trim();
-            if (trimmed === '')
-                return;
-            if (key === 'phone') {
-                if (!isCompletePhone(trimmed))
-                    return;
-                cleaned[key] = assertValidPhone(trimmed, 'Phone');
+            if (key === 'phone' || key === TRAINER_OPTIONAL_PHONE_KEY || key === TRAINER_OPTIONAL_EMAIL_KEY) {
                 return;
             }
             if (key === 'email') {
-                if (trimmed && !trimmed.includes('@')) {
-                    throw new Error('Please enter a valid RETC facilitator email.');
+                if (trimmed === '') {
+                    if (isEdit)
+                        cleaned[key] = '';
+                    return;
                 }
-                cleaned[key] = trimmed.toLowerCase();
+                cleaned[key] = sanitizeOptionalEmail(trimmed, 'Email');
                 return;
             }
+            if (trimmed === '')
+                return;
             cleaned[key] = trimmed;
             return;
         }
         cleaned[key] = value;
     });
+    Object.assign(cleaned, buildTrainerContactWriteFields(data, { isEdit, existingTrainer }));
     if (Array.isArray(data.specializations)) {
         const keys = normalizeSpecializationKeys(data.specializations);
         if (keys.length === 0) {
             throw new Error('Select at least one specialization.');
         }
         cleaned.specializations = keys;
+        const technologySelections = data.technology_selections && typeof data.technology_selections === 'object'
+            ? data.technology_selections
+            : technologySelectionsFromInputs(data.technology_inputs, keys);
+        if (Object.keys(technologySelections).length > 0) {
+            cleaned.technology_selections = assertTechnologySelectionsForCategories(
+                keys,
+                technologySelections,
+            );
+        }
     }
     if (cleaned.training_partner) {
-        // Keep backward compatibility with existing Appwrite schema keys.
-        if (!cleaned.organization) {
-            cleaned.organization = cleaned.training_partner;
-        }
-        if (!cleaned['training-partners']) {
-            cleaned['training-partners'] = cleaned.training_partner;
-        }
+        cleaned['training-partners'] = cleaned.training_partner;
     }
     if (!String(cleaned.training_partner || '').trim()
-        && !String(cleaned.organization || '').trim()
         && !String(cleaned['training-partners'] || '').trim()) {
         throw new Error('Training partner is required.');
     }
     if (!String(cleaned.email || '').trim()) {
         throw new Error('Email is required.');
     }
+    const primaryEmail = String(cleaned.email || '').trim().toLowerCase();
+    const optionalEmail = cleaned[TRAINER_OPTIONAL_EMAIL_KEY];
+    const optionalEmailStr = optionalEmail ? String(optionalEmail).trim().toLowerCase() : '';
+    if (optionalEmailStr && optionalEmailStr === primaryEmail) {
+        throw new Error('Additional email must be different from the primary email.');
+    }
+    const primaryPhone = cleaned.phone ? String(cleaned.phone).trim() : '';
+    const optionalPhone = cleaned[TRAINER_OPTIONAL_PHONE_KEY];
+    const optionalPhoneStr = optionalPhone ? String(optionalPhone).trim() : '';
+    if (primaryPhone && optionalPhoneStr && phonesAreEquivalent(primaryPhone, optionalPhoneStr)) {
+        throw new Error('Additional contact must be different from the primary phone.');
+    }
+    delete cleaned.technology_inputs;
     return cleaned;
 }
-function buildTrainerPayloadCandidates(payload) {
-    const base = { ...payload };
-    const trainingPartner = String(base.training_partner || '').trim();
-    const email = String(base.email || '').trim().toLowerCase();
-    const specializations = normalizeSpecializationKeys(base.specializations);
+function buildTrainerDocument(formData, { isEdit = false, existingTrainer = null } = {}) {
+    const trainingPartner = String(
+        formData.training_partner
+        || formData['training-partners']
+        || '',
+    ).trim();
+    const email = String(formData.email || '').trim().toLowerCase();
+    const specializations = normalizeSpecializationKeys(formData.specializations);
     if (!email) {
         throw new Error('Email is required.');
+    }
+    if (!email.includes('@')) {
+        throw new Error('Please enter a valid RETC facilitator email.');
     }
     if (!trainingPartner) {
         throw new Error('Training partner is required.');
@@ -92,58 +142,42 @@ function buildTrainerPayloadCandidates(payload) {
     if (!specializations.length) {
         throw new Error('Select at least one specialization.');
     }
-    delete base.training_partner;
-    delete base.trainingPartner;
-    delete base.training_partners;
-    delete base['training-partners'];
-    delete base.organization;
-    delete base.specialization;
-    delete base.specialisation;
-    delete base.specializations;
-    delete base.specialization_keys;
-    delete base.specializationKeys;
-    base.email = email;
-    const candidates = [];
-    const specVariants = buildSpecializationWriteVariants(specializations);
-    const partnerVariants = [
-        { 'training-partners': trainingPartner },
-        { training_partners: trainingPartner },
-        { trainingPartner: trainingPartner },
-        { organization: trainingPartner },
-        {},
-    ];
-    specVariants.forEach((specPatch) => {
-        partnerVariants.forEach((partnerPatch) => {
-            candidates.push({ ...base, ...specPatch, ...partnerPatch });
-        });
-    });
-    return candidates;
+    const technologySelections = formData.technology_selections && typeof formData.technology_selections === 'object'
+        ? assertTechnologySelectionsForCategories(specializations, formData.technology_selections)
+        : technologySelectionsFromInputs(formData.technology_inputs, specializations);
+    const document = {
+        name: String(formData.name || '').trim(),
+        years_of_experience: Number(formData.years_of_experience),
+        role: String(formData.role || 'trainer').trim(),
+        status: String(formData.status || 'active').trim(),
+        email,
+        'training-partners': trainingPartner,
+        specialization: formatSpecializationForAppwrite(specializations),
+        ...buildTechnologyWritePayload(technologySelections),
+        ...buildTrainerContactWriteFields(formData, { isEdit, existingTrainer }),
+    };
+    return document;
 }
-async function createTrainerWithFallback(payload) {
-    const candidates = buildTrainerPayloadCandidates(payload);
-    const errors = [];
-    for (let i = 0; i < candidates.length; i++) {
-        try {
-            return await databases.createDocument(DB_ID, COLLECTIONS.TRAINERS, 'unique()', candidates[i]);
-        }
-        catch (error) {
-            errors.push(`Attempt ${i + 1}: ${error instanceof Error ? error.message : String(error)}`);
-        }
+async function createTrainerWithFallback(formData) {
+    const document = buildTrainerDocument(formData, { isEdit: false });
+    try {
+        return await databases.createDocument(DB_ID, COLLECTIONS.TRAINERS, 'unique()', document);
     }
-    throw new Error(`Failed to create RETC facilitator. ${errors.join(' | ')}`);
+    catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to create RETC facilitator. ${msg}`);
+    }
 }
-async function updateTrainerWithFallback(trainerId, payload) {
-    const candidates = buildTrainerPayloadCandidates(payload);
-    const errors = [];
-    for (let i = 0; i < candidates.length; i++) {
-        try {
-            return await databases.updateDocument(DB_ID, COLLECTIONS.TRAINERS, trainerId, candidates[i]);
-        }
-        catch (error) {
-            errors.push(`Attempt ${i + 1}: ${error instanceof Error ? error.message : String(error)}`);
-        }
+async function updateTrainerWithFallback(trainerId, formData, existingTrainer = null) {
+    const document = buildTrainerDocument(formData, { isEdit: true, existingTrainer });
+    try {
+        const updated = await databases.updateDocument(DB_ID, COLLECTIONS.TRAINERS, trainerId, document);
+        return { ...updated, ...document };
     }
-    throw new Error(`Failed to update RETC facilitator. ${errors.join(' | ')}`);
+    catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to update RETC facilitator. ${msg}`);
+    }
 }
 export default function TrainersPage() {
     const { isAdmin } = useAuth();
@@ -230,28 +264,21 @@ export default function TrainersPage() {
     };
     const handleSaveTrainer = async (data) => {
         try {
-            const payload = sanitizeTrainerPayload(data);
-            const normalizedEmail = String(payload.email || '').trim().toLowerCase();
-            const normalizedPhone = String(payload.phone || '').trim();
+            const isEdit = Boolean(selectedTrainer);
+            sanitizeTrainerPayload(data, { isEdit, existingTrainer: selectedTrainer });
+            const payload = buildTrainerDocument(data, { isEdit, existingTrainer: selectedTrainer });
             const selectedId = documentStableId(selectedTrainer);
-            const duplicate = trainers.find((trainer) => {
-                if (selectedTrainer && documentStableId(trainer) === selectedId)
-                    return false;
-                const emailMatch = normalizedEmail && String(trainer.email || '').trim().toLowerCase() === normalizedEmail;
-                const phoneMatch = normalizedPhone && phonesAreEquivalent(trainer.phone, normalizedPhone);
-                return emailMatch || phoneMatch;
-            });
+            const duplicate = findFacilitatorContactDuplicate(trainers, payload, { excludeId: selectedId });
             if (duplicate) {
-                const reason = String(duplicate.email || '').trim().toLowerCase() === normalizedEmail ? 'email' : 'phone';
-                throw new Error(`An RETC facilitator with this ${reason} already exists.`);
+                throw new Error(`An RETC facilitator with this ${duplicate.reason} already exists.`);
             }
             if (selectedTrainer) {
                 const updateId = String(selectedTrainer.$id || selectedTrainer.documentId || selectedId).trim();
-                const updated = await updateTrainerWithFallback(updateId, payload);
+                const updated = await updateTrainerWithFallback(updateId, data, selectedTrainer);
                 setTrainers(trainers.map((t) => (documentStableId(t) === selectedId ? updated : t)));
             }
             else {
-                const response = await createTrainerWithFallback(payload);
+                const response = await createTrainerWithFallback(data);
                 setTrainers([...trainers, response]);
             }
             setShowDialog(false);
@@ -277,7 +304,11 @@ export default function TrainersPage() {
             const matchesQuery = !q
                 || String(t.name || '').toLowerCase().includes(q)
                 || String(t.email || '').toLowerCase().includes(q)
+                || String(t[TRAINER_OPTIONAL_EMAIL_KEY] || '').toLowerCase().includes(q)
+                || String(t.phone || '').toLowerCase().includes(q)
+                || String(t[TRAINER_OPTIONAL_PHONE_KEY] || '').toLowerCase().includes(q)
                 || trainerMatchesSpecializationQuery(t, q)
+                || trainerMatchesTechnologyQuery(t, q)
                 || String(t.training_partner || t.trainingPartner || t['training-partners'] || t.training_partners || t.organization || '').toLowerCase().includes(q);
             const matchesRole = filters.role === 'all' || String(t.role || '').toLowerCase() === filters.role;
             const matchesStatus = filters.status === 'all' || String(t.status || '').toLowerCase() === filters.status;
@@ -299,7 +330,7 @@ export default function TrainersPage() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <div className="space-y-2">
             <Label>Search</Label>
-            <Input placeholder="Name, email, specialization..." value={filters.query} onChange={(e) => setFilters((prev) => ({ ...prev, query: e.target.value }))}/>
+            <Input placeholder="Name, email, phone, specialization..." value={filters.query} onChange={(e) => setFilters((prev) => ({ ...prev, query: e.target.value }))}/>
           </div>
           <div className="space-y-2">
             <Label>Role</Label>

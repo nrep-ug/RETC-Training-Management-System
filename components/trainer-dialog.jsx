@@ -9,7 +9,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, } from '
 import { Checkbox } from '@/components/ui/checkbox';
 import { getCourseFormSelectOptions } from '@/lib/renewable-energy-courses';
 import { getSpecializationsFromTrainer } from '@/lib/trainer-specializations';
+import {
+    getTechnologyInputsFromTrainer,
+    technologySelectionsFromInputs,
+} from '@/lib/trainer-technologies';
 import { getRetcFacilitatorRoleLabel, RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
+import { getTrainerOptionalPhone, getTrainerPrimaryPhone } from '@/lib/trainer-contact-fields';
+import { hasMeaningfulPhoneDigits } from '@/lib/phone';
 
 export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = [], isPartnersLoading = false, }) {
     const [isLoading, setIsLoading] = useState(false);
@@ -21,10 +27,13 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
         name: '',
         years_of_experience: '',
         specializations: [],
+        technology_inputs: {},
         training_partner: '',
         role: 'trainer',
         email: '',
+        optional_email: '',
         phone: '',
+        optional_phone: '',
         status: 'active',
     });
     const lastTrainerKeyRef = useRef('');
@@ -48,10 +57,13 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
                 name: trainer.name || '',
                 years_of_experience: String(trainer.years_of_experience ?? ''),
                 specializations: getSpecializationsFromTrainer(trainer),
+                technology_inputs: getTechnologyInputsFromTrainer(trainer),
                 training_partner: trainer.training_partner || trainer.trainingPartner || trainer['training-partners'] || trainer.training_partners || trainer.organization || '',
                 role: trainer.role || 'trainer',
                 email: trainer.email || '',
-                phone: trainer.phone || '',
+                optional_email: trainer.optional_email || '',
+                phone: getTrainerPrimaryPhone(trainer),
+                optional_phone: getTrainerOptionalPhone(trainer),
                 status: trainer.status || 'active',
             });
         }
@@ -60,10 +72,13 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
                 name: '',
                 years_of_experience: '',
                 specializations: [],
+                technology_inputs: {},
                 training_partner: '',
                 role: 'trainer',
                 email: '',
+                optional_email: '',
                 phone: '',
+                optional_phone: '',
                 status: 'active',
             });
         }
@@ -78,7 +93,14 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
                 return 'Years of experience must be a non-negative whole number.';
             }
             if (!Array.isArray(formData.specializations) || formData.specializations.length === 0) {
-                return 'Select at least one specialization.';
+                return 'Select at least one specialization category.';
+            }
+            for (const categoryKey of formData.specializations) {
+                const typed = String(formData.technology_inputs?.[categoryKey] || '').trim();
+                if (!typed) {
+                    const label = specializationOptions.find((opt) => opt.value === categoryKey)?.label || categoryKey;
+                    return `Enter at least one technology under ${label}.`;
+                }
             }
             if (!String(formData.training_partner || '').trim()) {
                 return 'Training partner is required.';
@@ -88,6 +110,23 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
         if (step === 2) {
             if (!String(formData.email || '').trim()) {
                 return 'Email is required.';
+            }
+            const email = String(formData.email || '').trim();
+            if (!email.includes('@')) {
+                return 'Please enter a valid email address.';
+            }
+            const optionalEmail = String(formData.optional_email || '').trim();
+            if (optionalEmail && !optionalEmail.includes('@')) {
+                return 'Please enter a valid additional email address.';
+            }
+            if (optionalEmail && optionalEmail.toLowerCase() === email.toLowerCase()) {
+                return 'Additional email must be different from the primary email.';
+            }
+            if (!hasMeaningfulPhoneDigits(formData.phone)) {
+                const existingPhone = trainer ? getTrainerPrimaryPhone(trainer) : '';
+                if (!hasMeaningfulPhoneDigits(existingPhone)) {
+                    return 'Primary phone is required.';
+                }
             }
             return '';
         }
@@ -103,9 +142,20 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
                 throw new Error(validationError);
             const years = Number(formData.years_of_experience);
             await onSave({
-                ...formData,
+                name: formData.name,
                 years_of_experience: years,
                 specializations: formData.specializations,
+                technology_selections: technologySelectionsFromInputs(
+                    formData.technology_inputs || {},
+                    formData.specializations,
+                ),
+                training_partner: formData.training_partner,
+                role: formData.role,
+                email: formData.email,
+                optional_email: formData.optional_email,
+                phone: formData.phone,
+                optional_phone: formData.optional_phone,
+                status: formData.status,
             });
         }
         catch (error) {
@@ -122,12 +172,28 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
     const toggleSpecialization = (courseKey, checked) => {
         setFormData((prev) => {
             const current = new Set(prev.specializations || []);
+            const technologyInputs = { ...(prev.technology_inputs || {}) };
             if (checked)
                 current.add(courseKey);
-            else
+            else {
                 current.delete(courseKey);
-            return { ...prev, specializations: Array.from(current) };
+                delete technologyInputs[courseKey];
+            }
+            return {
+                ...prev,
+                specializations: Array.from(current),
+                technology_inputs: technologyInputs,
+            };
         });
+    };
+    const setTechnologyInput = (categoryKey, value) => {
+        setFormData((prev) => ({
+            ...prev,
+            technology_inputs: {
+                ...(prev.technology_inputs || {}),
+                [categoryKey]: value,
+            },
+        }));
     };
     const handleNext = () => {
         const validationError = validateStep(currentStep);
@@ -198,20 +264,44 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
 
           <div className="space-y-3">
             <div>
-              <Label>Specializations *</Label>
-              <p className="mt-0.5 text-xs text-slate-500">Select all areas this facilitator can deliver (one or more).</p>
+              <Label>Specialization categories *</Label>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Choose each area this facilitator can deliver, then type the technologies they can train in.
+              </p>
             </div>
-            <div className="max-h-44 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3">
-              {specializationOptions.map((opt) => (
-                <label key={opt.value} className="flex items-center gap-2 text-sm text-slate-700">
-                  <Checkbox
-                    checked={(formData.specializations || []).includes(opt.value)}
-                    onCheckedChange={(checked) => toggleSpecialization(opt.value, checked === true)}
-                    disabled={isLoading}
-                  />
-                  <span>{opt.label}</span>
-                </label>
-              ))}
+            <div className="max-h-72 space-y-3 overflow-y-auto rounded-md border border-slate-200 p-3">
+              {specializationOptions.map((opt) => {
+                const categorySelected = (formData.specializations || []).includes(opt.value);
+                return (
+                  <div key={opt.value} className="rounded-md border border-slate-100 bg-slate-50/60 p-3">
+                    <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
+                      <Checkbox
+                        checked={categorySelected}
+                        onCheckedChange={(checked) => toggleSpecialization(opt.value, checked === true)}
+                        disabled={isLoading}
+                      />
+                      <span>{opt.label}</span>
+                    </label>
+                    {categorySelected && (
+                      <div className="mt-3 space-y-1.5 border-l-2 border-[#047857]/30 pl-3">
+                        <Label htmlFor={`technologies-${opt.value}`} className="text-xs font-medium text-slate-500">
+                          Technologies *
+                        </Label>
+                        <Input
+                          id={`technologies-${opt.value}`}
+                          value={formData.technology_inputs?.[opt.value] || ''}
+                          onChange={(e) => setTechnologyInput(opt.value, e.target.value)}
+                          placeholder="e.g. Lucas-Nülle, Grid-tied PV, Off-grid systems"
+                          disabled={isLoading}
+                        />
+                        <p className="text-xs text-slate-500">
+                          Separate multiple technologies with commas. Add as many as needed.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -259,13 +349,25 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
 
           {currentStep === 2 && (<>
           <div className="space-y-2">
-            <Label htmlFor="email">Email *</Label>
-            <Input id="email" type="email" value={formData.email} onChange={(e) => handleChange('email', e.target.value)} placeholder="trainer@example.com" disabled={isLoading}/>
+            <Label htmlFor="email">Primary email *</Label>
+            <Input id="email" type="email" value={formData.email} onChange={(e) => handleChange('email', e.target.value)} placeholder="work@organisation.org" disabled={isLoading}/>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="phone">Phone</Label>
+            <Label htmlFor="optional_email">Additional email</Label>
+            <Input id="optional_email" type="email" value={formData.optional_email} onChange={(e) => handleChange('optional_email', e.target.value)} placeholder="personal@example.com (optional)" disabled={isLoading}/>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="phone">Primary phone *</Label>
             <PhoneNumberInput id="phone" value={formData.phone} onChange={(phone) => handleChange('phone', phone)} disabled={isLoading}/>
+            <p className="text-xs text-slate-500">Required — enter the full number after +256.</p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="optional_phone">Additional contact</Label>
+            <PhoneNumberInput id="optional_phone" value={formData.optional_phone} onChange={(phone) => handleChange('optional_phone', phone)} disabled={isLoading}/>
+            <p className="text-xs text-slate-500">Optional — delete the digits after +256 to remove this number.</p>
           </div>
           </>)}
 
