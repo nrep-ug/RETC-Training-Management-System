@@ -133,7 +133,7 @@ function buildTraineePayloadCandidates(payload, programId) {
     const levelKey = payload.trainee_level ? assertValidTraineeLevel(payload.trainee_level) : '';
     const withConsent = payload.consent_given != null && payload.consent_given !== ''
         ? {
-            ...base,
+        ...base,
             consent_given: normalizeConsentGivenForAppwrite(payload.consent_given),
         }
         : { ...base };
@@ -141,7 +141,7 @@ function buildTraineePayloadCandidates(payload, programId) {
     delete withoutConsentDate.consent_date;
     const consentTrueFalse = withConsent.consent_given != null
         ? {
-            ...withoutConsentDate,
+        ...withoutConsentDate,
             consent_given: withConsent.consent_given === 'yes' ? 'true' : 'false',
         }
         : null;
@@ -358,7 +358,7 @@ export default function TraineesPage() {
             if (seq !== fetchSeqRef.current)
                 return;
             if (programDocs)
-                setPrograms(programDocs);
+            setPrograms(programDocs);
             if (trainerDocs)
                 setTrainers(trainerDocs);
             const trainerById = buildTrainerNameById(trainerDocs || trainers);
@@ -400,7 +400,7 @@ export default function TraineesPage() {
         }
         finally {
             if (seq === fetchSeqRef.current)
-                setIsLoading(false);
+            setIsLoading(false);
         }
     };
     const handleAddTrainee = () => {
@@ -644,7 +644,7 @@ export default function TraineesPage() {
                 description: wasReturningEnrollment
                     ? `Existing participant enrolled in the selected ${COURSE_MODULE_LABELS.moduleSingular}.`
                     : (selectedTrainee
-                        ? 'Changes were saved successfully.'
+                    ? 'Changes were saved successfully.'
                         : 'New trainee record created successfully.'),
             });
         }
@@ -845,14 +845,14 @@ export default function TraineesPage() {
                 </>);
             }
             return (<>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete trainee?</AlertDialogTitle>
-                <AlertDialogDescription>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete trainee?</AlertDialogTitle>
+            <AlertDialogDescription>
                   This will permanently remove <span className="font-medium text-slate-800">{trainee?.name}</span>
                   {linkedProgramIds.length > 0 ? ' and their course enrollment(s)' : ''}. This cannot be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
                 <AlertDialogCancel disabled={deleteBusy} className="border-[#ff8829] text-[#b45309] hover:bg-[#fff4eb] hover:text-[#9a3f05]">Cancel</AlertDialogCancel>
                 <Button
                   type="button"
@@ -862,7 +862,7 @@ export default function TraineesPage() {
                 >
                   {deleteBusy ? 'Deleting…' : 'Delete'}
                 </Button>
-              </AlertDialogFooter>
+          </AlertDialogFooter>
             </>);
           })()}
         </AlertDialogContent>

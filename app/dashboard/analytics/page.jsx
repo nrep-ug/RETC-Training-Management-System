@@ -57,6 +57,9 @@ import {
     LEVEL_CHART_COLORS,
     LEVEL_STACK_SERIES,
     buildGenderByCourseCategory,
+    buildGenderLevelChartForCategory,
+    LEVEL_GENDER_STACK_SERIES,
+    LEVEL_GENDER_STACK_COLORS,
     buildGroupedSegmentsFromStackRow,
     buildLevelByCourseCategory,
     enrichDistributionWithPercent,
@@ -225,6 +228,7 @@ export default function AnalyticsPage() {
     const [programPartnerAssignmentIndex, setProgramPartnerAssignmentIndex] = useState({});
     const [filters, setFilters] = useState({ ...ANALYTICS_DEFAULT_FILTERS });
     const [breakdownCategoryFilter, setBreakdownCategoryFilter] = useState('all');
+    const [breakdownGenderChartFilter, setBreakdownGenderChartFilter] = useState('all');
     const [analyticsExportFormat, setAnalyticsExportFormat] = useState(ANALYTICS_EXPORT_FORMATS.tabular);
     const [isExportingPdf, setIsExportingPdf] = useState(false);
     const exportRootRef = useRef(null);
@@ -466,18 +470,28 @@ export default function AnalyticsPage() {
         ),
         [levelBreakdownView.stackedChartData],
     );
-    const genderGroupedChartData = useMemo(
-        () => buildGroupedSegmentsFromStackRow(
+    const genderLevelChartView = useMemo(() => {
+        if (!isBreakdownCategoryFiltered)
+            return null;
+        return buildGenderLevelChartForCategory(
             genderBreakdownView.stackedChartData[0],
-            GENDER_STACK_SERIES,
-            GENDER_STACK_COLORS,
-        ),
-        [genderBreakdownView.stackedChartData],
-    );
+            breakdownGenderChartFilter,
+        );
+    }, [isBreakdownCategoryFiltered, genderBreakdownView.stackedChartData, breakdownGenderChartFilter]);
     useEffect(() => {
         if (filters.course !== 'all')
             setBreakdownCategoryFilter(filters.course);
     }, [filters.course]);
+    useEffect(() => {
+        setBreakdownGenderChartFilter('all');
+    }, [breakdownCategoryFilter]);
+    useEffect(() => {
+        if (!genderLevelChartView?.genderOptions?.length)
+            return;
+        const stillValid = genderLevelChartView.genderOptions.some((opt) => opt.value === breakdownGenderChartFilter);
+        if (!stillValid)
+            setBreakdownGenderChartFilter('all');
+    }, [genderLevelChartView?.genderOptions, breakdownGenderChartFilter]);
     useEffect(() => {
         if (breakdownCategoryFilter === 'all')
             return;
@@ -1242,29 +1256,52 @@ export default function AnalyticsPage() {
       {genderBreakdownView.grandTotal > 0 && (<Card
           className="border-[#047857]/20 p-4 shadow-sm xl:min-h-0"
           data-analytics-export-chart
-          data-export-title="Participants by gender and course category"
+          data-export-title="Participants by gender, level, and course category"
         >
-          <div className="mb-4" data-analytics-export-pdf-hide>
-            <h2 className="text-lg font-semibold text-gray-900">Participants by gender and course category</h2>
-            <p className="mt-1 text-sm text-slate-600">
-              {isBreakdownCategoryFiltered
-                ? `${genderBreakdownView.selectedCategory} — ${genderBreakdownView.grandTotal} participants. Counts and percentages are shown on each bar.`
-                : `Participant counts by gender within each ${COURSE_MODULE_LABELS.categoryFilterLabel.toLowerCase()}. Select a category above to focus on one course.`}
-            </p>
+          <div className="mb-4 space-y-3" data-analytics-export-pdf-hide>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Participants by gender, level, and course category</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  {isBreakdownCategoryFiltered
+                    ? breakdownGenderChartFilter === 'all'
+                        ? `${genderBreakdownView.selectedCategory} — ${genderBreakdownView.grandTotal} participants. Each bar is a trainee level with male, female, and other stacked.`
+                        : `${genderBreakdownView.selectedCategory} — ${genderLevelChartView?.total ?? 0} ${genderLevelChartView?.genderLabel?.toLowerCase() ?? ''} participants by trainee level.`
+                    : `Gender and participant level within each ${COURSE_MODULE_LABELS.categoryFilterLabel.toLowerCase()}. Select a category above, then filter by gender for a level breakdown.`}
+                </p>
+              </div>
+              {isBreakdownCategoryFiltered && (genderLevelChartView?.genderOptions?.length ?? 0) > 1 && (
+                <div className="min-w-[180px] shrink-0 space-y-1.5">
+                  <Label htmlFor="breakdown-gender-chart-filter">Gender</Label>
+                  <Select value={breakdownGenderChartFilter} onValueChange={setBreakdownGenderChartFilter}>
+                    <SelectTrigger id="breakdown-gender-chart-filter" className="w-full">
+                      <SelectValue placeholder="All genders" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {genderLevelChartView.genderOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
           </div>
           <ResponsiveContainer
             width="100%"
             height={isBreakdownCategoryFiltered
-                ? Math.max(300, genderGroupedChartData.length * 72)
-                : Math.max(280, genderBreakdownView.stackedChartData.length * 48)}
+                ? (genderLevelChartView?.mode === 'by-level'
+                    ? Math.max(280, (genderLevelChartView?.chartData?.length ?? 0) * 72)
+                    : Math.max(320, (genderLevelChartView?.chartData?.length ?? 0) * 56))
+                : Math.max(320, genderBreakdownView.stackedChartData.length * 56)}
           >
-            {isBreakdownCategoryFiltered ? (
-            <BarChart data={genderGroupedChartData} maxBarSize={72} margin={{ top: 28, right: 12, left: 4, bottom: 8 }}>
+            {isBreakdownCategoryFiltered && genderLevelChartView?.mode === 'by-level' ? (
+            <BarChart data={genderLevelChartView.chartData} maxBarSize={72} margin={{ top: 28, right: 12, left: 4, bottom: 8 }}>
               <CartesianGrid {...chartGridProps}/>
               <XAxis dataKey="segment" tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
               <YAxis allowDecimals={false} width={44} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
               <Bar dataKey="count" radius={[6, 6, 0, 0]}>
-                {genderGroupedChartData.map((entry) => (
+                {genderLevelChartView.chartData.map((entry) => (
                   <Cell key={entry.segment} fill={entry.fill}/>
                 ))}
                 <LabelList
@@ -1276,17 +1313,17 @@ export default function AnalyticsPage() {
                 />
               </Bar>
             </BarChart>
-            ) : (
-            <BarChart data={genderBreakdownView.stackedChartData} maxBarSize={56} margin={{ top: 28, right: 8, left: 4, bottom: 56 }}>
+            ) : isBreakdownCategoryFiltered && genderLevelChartView?.mode === 'stacked-by-level' ? (
+            <BarChart data={genderLevelChartView.chartData} maxBarSize={56} margin={{ top: 28, right: 8, left: 4, bottom: 8 }}>
               <CartesianGrid {...chartGridProps}/>
-              <XAxis dataKey="category" interval={0} angle={-22} textAnchor="end" height={72} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
+              <XAxis dataKey="level" tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
               <YAxis allowDecimals={false} width={44} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
               <Legend wrapperStyle={{ fontSize: 12, color: '#475569' }}/>
               {GENDER_STACK_SERIES.map(({ countKey, name }) => (
                 <Bar
                   key={countKey}
                   dataKey={countKey}
-                  stackId="gender"
+                  stackId="genderInLevel"
                   fill={GENDER_STACK_COLORS[countKey]}
                   name={name}
                 >
@@ -1295,6 +1332,37 @@ export default function AnalyticsPage() {
                     position="center"
                     fill="#ffffff"
                     fontSize={10}
+                    fontWeight={700}
+                    formatter={(_value, entry) => {
+                        const row = entry?.payload ?? entry;
+                        const count = row?.[countKey] ?? 0;
+                        if (count <= 0)
+                            return '';
+                        return formatCountWithPercent(count, row.total, 1);
+                    }}
+                  />
+                </Bar>
+              ))}
+            </BarChart>
+            ) : isBreakdownCategoryFiltered ? null : (
+            <BarChart data={genderBreakdownView.stackedChartData} maxBarSize={56} margin={{ top: 28, right: 8, left: 4, bottom: 56 }}>
+              <CartesianGrid {...chartGridProps}/>
+              <XAxis dataKey="category" interval={0} angle={-22} textAnchor="end" height={72} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
+              <YAxis allowDecimals={false} width={44} tick={chartAxisProps.tick} axisLine={chartAxisProps.axisLine} tickLine={chartAxisProps.tickLine}/>
+              <Legend wrapperStyle={{ fontSize: 12, color: '#475569' }}/>
+              {LEVEL_GENDER_STACK_SERIES.map(({ countKey, name }) => (
+                <Bar
+                  key={countKey}
+                  dataKey={countKey}
+                  stackId="genderLevel"
+                  fill={LEVEL_GENDER_STACK_COLORS[countKey]}
+                  name={name}
+                >
+                  <LabelList
+                    dataKey={countKey}
+                    position="center"
+                    fill="#ffffff"
+                    fontSize={9}
                     fontWeight={700}
                     formatter={(_value, entry) => {
                         const row = entry?.payload ?? entry;

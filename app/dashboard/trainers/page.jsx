@@ -33,6 +33,11 @@ import {
     TRAINER_OPTIONAL_EMAIL_KEY,
     TRAINER_OPTIONAL_PHONE_KEY,
 } from '@/lib/trainer-contact-fields';
+import {
+    clearFacilitatorCvFields,
+    deleteFacilitatorCvForTrainer,
+    syncFacilitatorCvOnSave,
+} from '@/lib/trainer-documents';
 
 function documentStableId(doc) {
     if (!doc)
@@ -53,7 +58,12 @@ function sanitizeOptionalEmail(value, fieldLabel) {
 
 function sanitizeTrainerPayload(data, { isEdit = false, existingTrainer = null } = {}) {
     const cleaned = {};
-    const formOnlyKeys = new Set(['technology_inputs', 'technology_selections']);
+    const formOnlyKeys = new Set([
+        'technology_inputs',
+        'technology_selections',
+        'cv_file',
+        'remove_cv',
+    ]);
     Object.entries(data).forEach(([key, value]) => {
         if (formOnlyKeys.has(key))
             return;
@@ -243,6 +253,9 @@ export default function TrainersPage() {
         if (!pendingDeleteId)
             return;
         try {
+            const trainer = trainers.find((t) => t.$id === pendingDeleteId);
+            if (trainer)
+                await deleteFacilitatorCvForTrainer(trainer);
             await databases.deleteDocument(DB_ID, COLLECTIONS.TRAINERS, pendingDeleteId);
             setTrainers(trainers.filter(t => t.$id !== pendingDeleteId));
             toast({
@@ -267,6 +280,18 @@ export default function TrainersPage() {
             const isEdit = Boolean(selectedTrainer);
             sanitizeTrainerPayload(data, { isEdit, existingTrainer: selectedTrainer });
             const payload = buildTrainerDocument(data, { isEdit, existingTrainer: selectedTrainer });
+            const documentFields = await syncFacilitatorCvOnSave({
+                existingTrainer: selectedTrainer,
+                isEdit,
+                cvFile: data.cv_file || null,
+                cvFileId: data.cv_file_id || '',
+                cvFileName: data.cv_file_name || '',
+                removeCv: Boolean(data.remove_cv),
+            });
+            Object.entries(documentFields).forEach(([key, value]) => {
+                if (value !== undefined)
+                    payload[key] = value;
+            });
             const selectedId = documentStableId(selectedTrainer);
             const duplicate = findFacilitatorContactDuplicate(trainers, payload, { excludeId: selectedId });
             if (duplicate) {
@@ -274,11 +299,11 @@ export default function TrainersPage() {
             }
             if (selectedTrainer) {
                 const updateId = String(selectedTrainer.$id || selectedTrainer.documentId || selectedId).trim();
-                const updated = await updateTrainerWithFallback(updateId, data, selectedTrainer);
-                setTrainers(trainers.map((t) => (documentStableId(t) === selectedId ? updated : t)));
+                const updated = await databases.updateDocument(DB_ID, COLLECTIONS.TRAINERS, updateId, payload);
+                setTrainers(trainers.map((t) => (documentStableId(t) === selectedId ? { ...updated, ...payload } : t)));
             }
             else {
-                const response = await createTrainerWithFallback(data);
+                const response = await databases.createDocument(DB_ID, COLLECTIONS.TRAINERS, 'unique()', payload);
                 setTrainers([...trainers, response]);
             }
             setShowDialog(false);
@@ -293,6 +318,31 @@ export default function TrainersPage() {
             toast({
                 title: 'Save failed',
                 description: error instanceof Error ? error.message : 'Failed to save RETC facilitator.',
+                variant: 'destructive',
+            });
+            throw error;
+        }
+    };
+    const handleDeleteTrainerCv = async (trainer) => {
+        const trainerId = documentStableId(trainer);
+        if (!trainerId)
+            return;
+        try {
+            const clearedFields = await clearFacilitatorCvFields(trainer);
+            const updated = await databases.updateDocument(DB_ID, COLLECTIONS.TRAINERS, trainerId, clearedFields);
+            const merged = { ...trainer, ...updated, ...clearedFields };
+            setTrainers((prev) => prev.map((t) => (documentStableId(t) === trainerId ? merged : t)));
+            toast({
+                title: 'CV removed',
+                description: 'The facilitator CV was deleted successfully.',
+            });
+            return merged;
+        }
+        catch (error) {
+            console.error('Error deleting facilitator CV:', error);
+            toast({
+                title: 'Delete failed',
+                description: error instanceof Error ? error.message : 'Could not delete facilitator CV.',
                 variant: 'destructive',
             });
             throw error;
@@ -358,7 +408,7 @@ export default function TrainersPage() {
       </Card>
 
       <Card>
-        <TrainerTable trainers={filteredTrainers} isLoading={isLoading} onEdit={isAdmin ? handleEditTrainer : undefined} onDelete={isAdmin ? handleDeleteTrainer : undefined} isAdmin={isAdmin} paginationResetKey={JSON.stringify(filters)}/>
+        <TrainerTable trainers={filteredTrainers} isLoading={isLoading} onEdit={isAdmin ? handleEditTrainer : undefined} onDelete={isAdmin ? handleDeleteTrainer : undefined} onDeleteCv={isAdmin ? handleDeleteTrainerCv : undefined} isAdmin={isAdmin} paginationResetKey={JSON.stringify(filters)}/>
       </Card>
 
       {isAdmin && (<TrainerDialog open={showDialog} onOpenChange={setShowDialog} trainer={selectedTrainer} onSave={handleSaveTrainer} partners={partners} isPartnersLoading={isPartnersLoading}/>)}
