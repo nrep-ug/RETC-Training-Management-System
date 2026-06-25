@@ -2,7 +2,17 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Pencil, Trash2, Eye } from 'lucide-react';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Pencil, Trash2, Eye, FileText, Download, Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useClientPagination } from '@/hooks/use-client-pagination';
@@ -10,6 +20,12 @@ import { TablePaginationFooter } from '@/components/table-pagination-footer';
 import { getRetcFacilitatorRoleLabel, RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
 import { formatSpecializationsDisplay } from '@/lib/trainer-specializations';
 import { formatTechnologySelectionsDisplay } from '@/lib/trainer-technologies';
+import {
+    downloadFacilitatorDocument,
+    getTrainerCvFileId,
+    getTrainerCvFileName,
+    openFacilitatorDocument,
+} from '@/lib/trainer-documents';
 import {
     getTrainerOptionalEmail,
     getTrainerOptionalPhone,
@@ -35,10 +51,125 @@ function DetailField({ label, value, className = '' }) {
     );
 }
 
-function TrainerDetailView({ trainer }) {
+function TrainerCvPanel({ trainer, isAdmin, onDeleteCv, onTrainerChange }) {
+    const cvFileId = getTrainerCvFileId(trainer);
+    const cvFileName = getTrainerCvFileName(trainer) || 'Curriculum vitae';
+    const [busyAction, setBusyAction] = useState('');
+    const [error, setError] = useState('');
+    const [confirmDelete, setConfirmDelete] = useState(false);
+
+    const runAction = async (action, fn) => {
+        setBusyAction(action);
+        setError('');
+        try {
+            await fn();
+        }
+        catch (err) {
+            setError(err instanceof Error ? err.message : 'Action failed.');
+        }
+        finally {
+            setBusyAction('');
+        }
+    };
+
+    const handleView = () => runAction('view', () => openFacilitatorDocument(cvFileId));
+    const handleDownload = () => runAction('download', () => downloadFacilitatorDocument(cvFileId, cvFileName));
+    const handleDelete = async () => {
+        setBusyAction('delete');
+        setError('');
+        try {
+            const updated = await onDeleteCv?.(trainer);
+            if (updated)
+                onTrainerChange?.(updated);
+            setConfirmDelete(false);
+        }
+        catch (err) {
+            setError(err instanceof Error ? err.message : 'Could not delete CV.');
+        }
+        finally {
+            setBusyAction('');
+        }
+    };
+
+    return (
+        <div className="rounded-xl border border-[#047857]/15 bg-white p-4 shadow-sm">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#047857]">CV</p>
+            {cvFileId ? (
+                <div className="space-y-3">
+                    <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#047857]/15">
+                            <FileText className="h-5 w-5 text-[#047857]" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-semibold text-slate-800">{cvFileName}</p>
+                            <p className="text-xs text-slate-500">Uploaded document</p>
+                        </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        <Button type="button" size="sm" variant="outline" onClick={handleView} disabled={Boolean(busyAction)}>
+                            {busyAction === 'view' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Eye className="mr-2 h-4 w-4" />}
+                            View
+                        </Button>
+                        <Button type="button" size="sm" variant="outline" onClick={handleDownload} disabled={Boolean(busyAction)}>
+                            {busyAction === 'download' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                            Download
+                        </Button>
+                        {isAdmin && onDeleteCv ? (
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="text-red-600 hover:text-red-700"
+                                onClick={() => setConfirmDelete(true)}
+                                disabled={Boolean(busyAction)}
+                            >
+                                {busyAction === 'delete' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                                Delete
+                            </Button>
+                        ) : null}
+                    </div>
+                </div>
+            ) : (
+                <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+                    No CV uploaded for this facilitator.
+                </p>
+            )}
+            {error ? (
+                <p className="mt-2 text-sm text-red-600">{error}</p>
+            ) : null}
+
+            <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+                <AlertDialogContent className="border-[#047857]/25">
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete CV?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            This will permanently remove the CV file from storage. You can upload a new one when editing the facilitator.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={busyAction === 'delete'}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            className="bg-red-600 hover:bg-red-700"
+                            disabled={busyAction === 'delete'}
+                            onClick={(e) => {
+                                e.preventDefault();
+                                void handleDelete();
+                            }}
+                        >
+                            Delete CV
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </div>
+    );
+}
+
+function TrainerDetailView({ trainer, isAdmin, onDeleteCv, onTrainerChange }) {
     const partner = getTrainerPartnerName(trainer);
     const specializations = formatSpecializationsDisplay(trainer);
     const technologies = formatTechnologySelectionsDisplay(trainer);
+
     return (
         <div className="space-y-5 bg-gradient-to-b from-white via-white to-[#f7faf8] px-6 py-5">
             <div className="rounded-xl border border-[#047857]/20 bg-white p-4 shadow-sm">
@@ -69,6 +200,13 @@ function TrainerDetailView({ trainer }) {
                 </div>
             </div>
 
+            <TrainerCvPanel
+                trainer={trainer}
+                isAdmin={isAdmin}
+                onDeleteCv={onDeleteCv}
+                onTrainerChange={onTrainerChange}
+            />
+
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="rounded-xl border border-[#ff8829]/25 bg-white p-4 shadow-sm sm:col-span-2">
                     <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#b45309]">Professional profile</p>
@@ -85,7 +223,7 @@ function TrainerDetailView({ trainer }) {
     );
 }
 
-export function TrainerTable({ trainers, isLoading, onEdit, onDelete, isAdmin, paginationResetKey = '', }) {
+export function TrainerTable({ trainers, isLoading, onEdit, onDelete, onDeleteCv, isAdmin, paginationResetKey = '', }) {
     const [viewTrainer, setViewTrainer] = useState(null);
     const pagination = useClientPagination(trainers, { resetKey: paginationResetKey });
     if (isLoading) {
@@ -162,7 +300,14 @@ export function TrainerTable({ trainers, isLoading, onEdit, onDelete, isAdmin, p
               {RETC_FACILITATOR_LABELS.moduleSingular} profile
             </DialogTitle>
           </DialogHeader>
-          {viewTrainer && <TrainerDetailView trainer={viewTrainer} />}
+          {viewTrainer && (
+            <TrainerDetailView
+                trainer={viewTrainer}
+                isAdmin={isAdmin}
+                onDeleteCv={onDeleteCv}
+                onTrainerChange={setViewTrainer}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>);

@@ -16,12 +16,18 @@ import {
 import { getRetcFacilitatorRoleLabel, RETC_FACILITATOR_LABELS } from '@/lib/retc-partner-labels';
 import { getTrainerOptionalPhone, getTrainerPrimaryPhone } from '@/lib/trainer-contact-fields';
 import { hasMeaningfulPhoneDigits } from '@/lib/phone';
+import {
+    openFacilitatorDocument,
+    getTrainerCvFileId,
+    getTrainerCvFileName,
+} from '@/lib/trainer-documents';
+import { FileUploadZone } from '@/components/file-upload-zone';
 
 export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = [], isPartnersLoading = false, }) {
     const [isLoading, setIsLoading] = useState(false);
     const [submitError, setSubmitError] = useState('');
     const [currentStep, setCurrentStep] = useState(1);
-    const totalSteps = 2;
+    const totalSteps = 3;
     const specializationOptions = getCourseFormSelectOptions();
     const [formData, setFormData] = useState({
         name: '',
@@ -36,6 +42,10 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
         optional_phone: '',
         status: 'active',
     });
+    const [cvFile, setCvFile] = useState(null);
+    const [removeCv, setRemoveCv] = useState(false);
+    const [cvFileId, setCvFileId] = useState('');
+    const [cvFileName, setCvFileName] = useState('');
     const lastTrainerKeyRef = useRef('');
     useEffect(() => {
         const id = trainer?.$id ?? trainer?.documentId ?? trainer?.id;
@@ -52,7 +62,11 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
         }
         setSubmitError('');
         setCurrentStep(1);
+        setCvFile(null);
+        setRemoveCv(false);
         if (trainer) {
+            setCvFileId(getTrainerCvFileId(trainer));
+            setCvFileName(getTrainerCvFileName(trainer));
             setFormData({
                 name: trainer.name || '',
                 years_of_experience: String(trainer.years_of_experience ?? ''),
@@ -68,6 +82,8 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
             });
         }
         else {
+            setCvFileId('');
+            setCvFileName('');
             setFormData({
                 name: '',
                 years_of_experience: '',
@@ -130,6 +146,12 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
             }
             return '';
         }
+        if (step === 3) {
+            if (removeCv || (!cvFile && !cvFileId)) {
+                return 'CV is required.';
+            }
+            return '';
+        }
         return '';
     };
     const handleSubmit = async (e) => {
@@ -137,7 +159,7 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
         try {
             setIsLoading(true);
             setSubmitError('');
-            const validationError = validateStep(1) || validateStep(2);
+            const validationError = validateStep(1) || validateStep(2) || validateStep(3);
             if (validationError)
                 throw new Error(validationError);
             const years = Number(formData.years_of_experience);
@@ -156,6 +178,10 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
                 phone: formData.phone,
                 optional_phone: formData.optional_phone,
                 status: formData.status,
+                cv_file: cvFile,
+                cv_file_id: removeCv ? '' : cvFileId,
+                cv_file_name: cvFileName,
+                remove_cv: removeCv,
             });
         }
         catch (error) {
@@ -202,7 +228,7 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
             return;
         }
         setSubmitError('');
-        setCurrentStep((prev) => Math.min(prev + 1, 2));
+        setCurrentStep((prev) => Math.min(prev + 1, totalSteps));
     };
     const handleBack = () => {
         setSubmitError('');
@@ -231,8 +257,8 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
             <div className="h-2 overflow-hidden rounded-full bg-slate-100">
               <div className="h-full rounded-full bg-gradient-to-r from-[#047857] to-[#ff8829] transition-all duration-300" style={{ width: `${(currentStep / totalSteps) * 100}%` }}/>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-[11px]">
-              {['Profile', 'Contacts'].map((label, idx) => {
+            <div className="grid grid-cols-3 gap-2 text-[11px]">
+              {['Profile', 'Contacts', 'CV'].map((label, idx) => {
             const stepNo = idx + 1;
             const active = currentStep === stepNo;
             const completed = currentStep > stepNo;
@@ -371,6 +397,40 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
           </div>
           </>)}
 
+          {currentStep === 3 && (<>
+          <div className="space-y-2">
+            <Label htmlFor="trainer_cv">CV *</Label>
+            <FileUploadZone
+              id="trainer_cv"
+              disabled={isLoading}
+              selectedFile={cvFile}
+              existingFileName={!removeCv ? cvFileName : ''}
+              existingFileId={!removeCv ? cvFileId : ''}
+              onFileSelect={(file) => {
+                setCvFile(file);
+                setRemoveCv(false);
+              }}
+              onRemove={() => {
+                setCvFile(null);
+                if (cvFileId) {
+                    setRemoveCv(true);
+                    setCvFileId('');
+                    setCvFileName('');
+                }
+              }}
+              onViewExisting={cvFileId ? async () => {
+                try {
+                    await openFacilitatorDocument(cvFileId);
+                }
+                catch (error) {
+                    setSubmitError(error instanceof Error ? error.message : 'Could not open CV.');
+                }
+              } : undefined}
+              hint="Any file type is accepted"
+            />
+          </div>
+          </>)}
+
           <div className="flex gap-3 pt-4">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isLoading} className="flex-1">
               Cancel
@@ -378,7 +438,7 @@ export function TrainerDialog({ open, onOpenChange, trainer, onSave, partners = 
             {currentStep > 1 && (<Button type="button" variant="outline" onClick={handleBack} disabled={isLoading} className="flex-1">
                 Back
               </Button>)}
-            {currentStep < 2 ? (<Button type="button" onClick={(e) => {
+            {currentStep < totalSteps ? (<Button type="button" onClick={(e) => {
                     e.preventDefault();
                     handleNext();
                 }} disabled={isLoading} className="flex-1">

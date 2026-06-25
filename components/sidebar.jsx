@@ -7,7 +7,7 @@ import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { cn } from '@/lib/utils';
-import { LayoutDashboard, Users, UserRoundCog, BookOpen, BarChart3, FileText, CalendarDays, } from 'lucide-react';
+import { LayoutDashboard, Users, UserRoundCog, BookOpen, BarChart3, FileText, CalendarDays, MapPinned, } from 'lucide-react';
 import { Handshake } from 'lucide-react';
 export function Sidebar({ onNavigate, className }) {
     const pathname = usePathname();
@@ -47,6 +47,12 @@ export function Sidebar({ onNavigate, className }) {
             label: 'RETC Facilitators',
             href: '/dashboard/trainers',
             icon: UserRoundCog,
+            visible: true,
+        },
+        {
+            label: 'Study Trip Sites',
+            href: '/dashboard/study-trip-sites',
+            icon: MapPinned,
             visible: true,
         },
         {
